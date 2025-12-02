@@ -613,8 +613,8 @@
     const SESSION = urlQ.get("session") ?? el.dataset.session ?? "";
     const DEPTH   = urlQ.get("depth")   ?? el.dataset.depth   ?? "bilateral_temporal";
 
-    const PCD_BASE = (sess, depth) => `/static/reconstructions/${encodeURIComponent(sess)}/pcd_${depth}`;
-    const GS_BASE  = (sess, depth) => `/static/reconstructions/${encodeURIComponent(sess)}/gs_${depth}`;
+    const PCD_BASE = (sess, depth) => `/docs/static/reconstructions/${encodeURIComponent(sess)}/pcd_${depth}`;
+    const GS_BASE  = (sess, depth) => `/docs/static/reconstructions/${encodeURIComponent(sess)}/gs_${depth}`;
 
     /* ===== Safe PLY parsing ===== */
     const plyLoader = new PLYLoader();
@@ -1006,7 +1006,7 @@
     async function loadManifestAndCams(){
         if (!SESSION){ setStatus("Please provide ?session=…"); return []; }
         setStatus("Loading manifest…");
-        const mf = await (await fetch(`/static/reconstructions/${encodeURIComponent(SESSION)}/manifest.json`)).json();
+        const mf = await (await fetch(`/docs/static/reconstructions/${encodeURIComponent(SESSION)}/manifest.json`)).json();
         const cams = (mf.cameras || []);
         if (!cams.length){ setStatus("No cameras in manifest"); return []; }
 
