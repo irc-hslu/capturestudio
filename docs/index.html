@@ -19,7 +19,7 @@
     <meta property="og:title" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats">
     <meta property="og:description" content="Fast volumetric capture system converting RGB-D or RGB-only multi-view video into dynamic point clouds and Gaussian splats for real-time preview and playback.">
     <meta property="og:url" content="https://YOUR_DOMAIN.com/YOUR_PROJECT_PAGE">
-    <meta property="og:image" content="https://irc-hslu.github.io/capturestudio/docs/static/images/teaser_default.jpg">
+    <meta property="og:image" content="https://irc-hslu.github.io/capturestudio/static/images/teaser_default.jpg">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta property="og:image:alt" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats - Research Preview">
@@ -35,7 +35,7 @@
     <meta name="twitter:creator" content="@AUTHOR_TWITTER_HANDLE">
     <meta name="twitter:title" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats">
     <meta name="twitter:description" content="Fast volumetric capture system converting RGB-D or RGB-only multi-view video into dynamic point clouds and Gaussian splats for real-time preview and playback.">
-    <meta name="twitter:image" content="https://irc-hslu.github.io/capturestudio/docs/static/images/teaser_default.jpg">
+    <meta name="twitter:image" content="https://irc-hslu.github.io/capturestudio/static/images/teaser_default.jpg">
     <meta name="twitter:image:alt" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats - Research Preview">
 
     <!-- Academic/Research Specific -->
@@ -155,7 +155,7 @@
                 "name": "Association for Computing Machinery (ACM)"
             },
             "url": "https://YOUR_DOMAIN.com/YOUR_PROJECT_PAGE",
-            "image": "https://irc-hslu.github.io/capturestudio/docs/static/images/teaser_default.jpg",
+            "image": "https://irc-hslu.github.io/capturestudio/static/images/teaser_default.jpg",
             "keywords": [
                 "volumetric video capture",
                 "point clouds",
@@ -194,12 +194,8 @@
             "@context": "https://schema.org",
             "@type": "Organization",
             "name": "Lucerne University of Applied Sciences and Arts (HSLU)",
-            "url": "https://YOUR_INSTITUTION_WEBSITE.com",
-            "logo": "https://YOUR_DOMAIN.com/static/images/favicon.ico",
-            "sameAs": [
-                "https://twitter.com/YOUR_TWITTER_HANDLE",
-                "https://github.com/YOUR_GITHUB_USERNAME"
-            ]
+            "url": "https://irc-hslu.github.io",
+            "logo": "https://irc-hslu.github.io/capturestudio/static/images/favicon.ico",
         }
     </script>
 
@@ -613,8 +609,8 @@
     const SESSION = urlQ.get("session") ?? el.dataset.session ?? "";
     const DEPTH   = urlQ.get("depth")   ?? el.dataset.depth   ?? "bilateral_temporal";
 
-    const PCD_BASE = (sess, depth) => `/docs/static/reconstructions/${encodeURIComponent(sess)}/pcd_${depth}`;
-    const GS_BASE  = (sess, depth) => `/docs/static/reconstructions/${encodeURIComponent(sess)}/gs_${depth}`;
+    const PCD_BASE = (sess, depth) => `/capturestudio/static/reconstructions/${encodeURIComponent(sess)}/pcd_${depth}`;
+    const GS_BASE  = (sess, depth) => `/capturestudio/static/reconstructions/${encodeURIComponent(sess)}/gs_${depth}`;
 
     /* ===== Safe PLY parsing ===== */
     const plyLoader = new PLYLoader();
@@ -1006,7 +1002,7 @@
     async function loadManifestAndCams(){
         if (!SESSION){ setStatus("Please provide ?session=…"); return []; }
         setStatus("Loading manifest…");
-        const mf = await (await fetch(`/docs/static/reconstructions/${encodeURIComponent(SESSION)}/manifest.json`)).json();
+        const mf = await (await fetch(`/capturestudio/static/reconstructions/${encodeURIComponent(SESSION)}/manifest.json`)).json();
         const cams = (mf.cameras || []);
         if (!cams.length){ setStatus("No cameras in manifest"); return []; }
 
