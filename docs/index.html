@@ -1,0 +1,1324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- Primary Meta Tags -->
+    <meta name="title"
+          content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats - Athanasios Charisoudis, Simone Croci, Lam Kit Yung, Pascal Frossard, Aljosa Smolic">
+    <meta name="description" content="Fast volumetric capture system converting RGB-D or RGB-only multi-view video into dynamic point clouds and Gaussian splats for real-time preview and playback.">
+    <meta name="keywords" content="volumetric video capture, point clouds, Gaussian splats, dynamic reconstruction, RGB-D, stereo depth estimation, 3D reconstruction, WebXR, VR">
+    <meta name="author" content="Athanasios Charisoudis, Simone Croci, Lam Kit Yung, Pascal Frossard, Aljosa Smolic">
+    <meta name="robots" content="index, follow">
+    <meta name="language" content="English">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Lucerne University of Applied Sciences and Arts & École Polytechnique Fédérale de Lausanne">
+    <meta property="og:title" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats">
+    <meta property="og:description" content="Fast volumetric capture system converting RGB-D or RGB-only multi-view video into dynamic point clouds and Gaussian splats for real-time preview and playback.">
+    <meta property="og:url" content="https://YOUR_DOMAIN.com/YOUR_PROJECT_PAGE">
+    <meta property="og:image" content="https://YOUR_DOMAIN.com/static/images/social_preview.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats - Research Preview">
+    <meta property="article:published_time" content="2025-12-03T00:00:00.000Z">
+    <meta property="article:author" content="Athanasios Charisoudis">
+    <meta property="article:section" content="Research">
+    <meta property="article:tag" content="volumetric video capture">
+    <meta property="article:tag" content="Gaussian splats">
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:site" content="@YOUR_TWITTER_HANDLE">
+    <meta name="twitter:creator" content="@AUTHOR_TWITTER_HANDLE">
+    <meta name="twitter:title" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats">
+    <meta name="twitter:description" content="Fast volumetric capture system converting RGB-D or RGB-only multi-view video into dynamic point clouds and Gaussian splats for real-time preview and playback.">
+    <meta name="twitter:image" content="https://YOUR_DOMAIN.com/static/images/social_preview.png">
+    <meta name="twitter:image:alt" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats - Research Preview">
+
+    <!-- Academic/Research Specific -->
+    <meta name="citation_title" content="A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats">
+    <meta name="citation_author" content="Charisoudis, Athanasios">
+    <meta name="citation_author" content="Croci, Simone">
+    <meta name="citation_author" content="Lam, Kit Yung">
+    <meta name="citation_author" content="Frossard, Pascal">
+    <meta name="citation_author" content="Smolic, Aljosa">
+    <meta name="citation_publication_date" content="2025">
+    <meta name="citation_conference_title" content="European Conference on Visual Media Production (CVMP ’25)">
+    <meta name="citation_pdf_url" content="https://doi.org/10.1145/3756863.3769713">
+
+    <!-- Additional SEO -->
+    <meta name="theme-color" content="#2563eb">
+    <meta name="msapplication-TileColor" content="#2563eb">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+
+    <!-- Preconnect for performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://ajax.googleapis.com">
+    <link rel="preconnect" href="https://documentcloud.adobe.com">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+
+    <title>A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats - Charisoudis et al. | IRC, Hochschule Luzern</title>
+
+    <!-- Favicon and App Icons -->
+    <link rel="icon" type="image/x-icon" href="static/images/favicon.ico">
+    <link rel="apple-touch-icon" href="static/images/favicon.ico">
+
+    <!-- Critical CSS - Load synchronously -->
+    <link rel="stylesheet" href="static/css/justlazy.min.css">
+    <link rel="stylesheet" href="static/css/bulma.min.css">
+    <link rel="stylesheet" href="static/css/custom-magnifier.css">
+    <link rel="stylesheet" href="static/css/index.css">
+
+    <!-- Non-critical CSS - Load asynchronously -->
+    <link rel="preload" href="static/css/bulma-carousel.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <link rel="preload" href="static/css/bulma-slider.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <link rel="preload" href="static/css/fontawesome.all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <link rel="preload" href="static/css/magnifier.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <link rel="preload" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+
+    <!-- Fallback for browsers that don't support preload -->
+    <noscript>
+        <link rel="stylesheet" href="static/css/bulma-carousel.min.css">
+        <link rel="stylesheet" href="static/css/bulma-slider.min.css">
+        <link rel="stylesheet" href="static/css/fontawesome.all.min.css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+    </noscript>
+
+    <!-- Defer non-critical JavaScript -->
+    <script src="static/js/justlazy.min.js"></script>
+    <script defer src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <script defer src="https://documentcloud.adobe.com/view-sdk/main.js"></script>
+    <script defer src="static/js/fontawesome.all.min.js"></script>
+    <script defer src="static/js/bulma-carousel.min.js"></script>
+    <script defer src="static/js/bulma-slider.min.js"></script>
+    <script defer src="static/js/custom-magnifier.js"></script>
+    <script defer src="static/js/index.js"></script>
+<!--    <script defer type="module" src="static/js/viewer-embed.js"></script>-->
+
+    <!-- Structured Data for Academic Papers -->
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "ScholarlyArticle",
+            "headline": "A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats",
+            "description": "Fast volumetric capture system converting RGB-D or RGB-only multi-view video into dynamic point clouds and Gaussian splats for real-time preview and playback.",
+            "author": [
+                {
+                    "@type": "Person",
+                    "name": "Athanasios Charisoudis",
+                    "affiliation": {
+                        "@type": "Organization",
+                        "name": "École Polytechnique Fédérale de Lausanne (EPFL)"
+                    }
+                },
+                {
+                    "@type": "Person",
+                    "name": "Simone Croci",
+                    "affiliation": {
+                        "@type": "Organization",
+                        "name": "Lucerne University of Applied Sciences and Arts (HSLU)"
+                    }
+                },
+                {
+                    "@type": "Person",
+                    "name": "Lam Kit Yung",
+                    "affiliation": {
+                        "@type": "Organization",
+                        "name": "Lucerne University of Applied Sciences and Arts (HSLU)"
+                    }
+                },
+                {
+                    "@type": "Person",
+                    "name": "Pascal Frossard",
+                    "affiliation": {
+                        "@type": "Organization",
+                        "name": "École Polytechnique Fédérale de Lausanne (EPFL)"
+                    }
+                },
+                {
+                    "@type": "Person",
+                    "name": "Aljosa Smolic",
+                    "affiliation": {
+                        "@type": "Organization",
+                        "name": "Lucerne University of Applied Sciences and Arts (HSLU)"
+                    }
+                }
+            ],
+            "datePublished": "2025-12-03",
+            "publisher": {
+                "@type": "Organization",
+                "name": "Association for Computing Machinery (ACM)"
+            },
+            "url": "https://YOUR_DOMAIN.com/YOUR_PROJECT_PAGE",
+            "image": "https://YOUR_DOMAIN.com/static/images/social_preview.png",
+            "keywords": [
+                "volumetric video capture",
+                "point clouds",
+                "Gaussian splats",
+                "dynamic reconstruction",
+                "RGB-D",
+                "stereo depth estimation",
+                "3D reconstruction",
+                "WebXR",
+                "VR"
+            ],
+            "abstract": "We present a fast and efficient volumetric capture and reconstruction system that processes either RGB-D or RGB-only input to generate 3D representations in the form of point clouds and Gaussian splats. For Gaussian splat reconstructions, we took the GPS-Gaussian regressor and improved it, enabling high-quality reconstructions with minimal overhead. The system is designed for easy setup and deployment, supporting in-the-wild operation under uncontrolled illumination and arbitrary backgrounds, as well as flexible camera configurations, including sparse setups, arbitrary camera numbers and baselines. Captured data can be exported in standard formats such as PLY, MPEG V-PCC, and SPLAT, and visualized through a web-based viewer or Unity/Unreal plugins. A live on-location preview of both input and reconstruction is available at 5–10 FPS. We present qualitative findings focused on deployability and targeted ablations. The complete framework is open-source, facilitating reproducibility and further research.",
+            "citation": "Charisoudis, Athanasios, Croci, Simone, Lam, Kit Yung, Frossard, Pascal, and Smolic, Aljosa. 2025. A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats. In European Conference on Visual Media Production (CVMP ’25), December 3–4, 2025, London, United Kingdom. ACM, New York, NY, USA. https://doi.org/10.1145/3756863.3769713",
+            "isAccessibleForFree": true,
+            "license": "https://creativecommons.org/licenses/by/4.0/",
+            "mainEntity": {
+                "@type": "WebPage",
+                "@id": "https://YOUR_DOMAIN.com/YOUR_PROJECT_PAGE"
+            },
+            "about": [
+                {
+                    "@type": "Thing",
+                    "name": "Volumetric video capture"
+                },
+                {
+                    "@type": "Thing",
+                    "name": "Gaussian splatting"
+                }
+            ]
+        }
+    </script>
+
+    <!-- Website/Organization Structured Data -->
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "Organization",
+            "name": "Lucerne University of Applied Sciences and Arts (HSLU)",
+            "url": "https://YOUR_INSTITUTION_WEBSITE.com",
+            "logo": "https://YOUR_DOMAIN.com/static/images/favicon.ico",
+            "sameAs": [
+                "https://twitter.com/YOUR_TWITTER_HANDLE",
+                "https://github.com/YOUR_GITHUB_USERNAME"
+            ]
+        }
+    </script>
+
+    <style>
+        .hud{
+            position:absolute; z-index:10; top:8px; right:8px;
+            background:#111a; color:#ddd; backdrop-filter:blur(4px);
+            font:12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            padding:8px 10px; border-radius:8px; border:1px solid #222;
+        }
+        .hud .row{ display:flex; gap:.5em; margin-top:.25em; }
+        .hud code{ color:#aaa; }
+        .bar{
+            position:absolute; z-index:9; left:8px; right:8px; top:8px; height:3px;
+            background:#333; border-radius:3px; overflow:hidden;
+        }
+        .bar:before{
+            content:""; display:block; height:100%; width:var(--p, 0%);
+            background:#4ade80;
+        }
+        #pcv{ position:relative; }
+    </style>
+</head>
+<body>
+
+
+<!-- Scroll to Top Button -->
+<button class="scroll-to-top" onclick="scrollToTop()" title="Scroll to top" aria-label="Scroll to top">
+    <i class="fas fa-chevron-up"></i>
+</button>
+
+<!-- More Works Dropdown -->
+<div class="more-works-container">
+    <button class="more-works-btn" onclick="toggleMoreWorks()" title="View More Works from Our Lab">
+        <i class="fas fa-flask"></i>
+        More Works
+        <i class="fas fa-chevron-down dropdown-arrow"></i>
+    </button>
+    <div class="more-works-dropdown" id="moreWorksDropdown">
+        <div class="dropdown-header">
+            <h4>More Works from Our Lab</h4>
+            <button class="close-btn" onclick="toggleMoreWorks()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="works-list">
+            <!-- Selected related works from the Immersive Realities Center -->
+            <a href="https://irc-hslu.github.io/GSvsPhotogrammetry/" class="work-item" target="_blank">
+                <div class="work-info">
+                    <h5>Gaussian Splatting vs. Classical Photogrammetry: A Comparison for Virtual Backdrops</h5>
+                    <p>Compares three end-to-end workflows — photogrammetry, 3D Gaussian splatting, and mesh extraction — to create virtual production backdrops from smartphone captures.</p>
+                    <span class="work-venue">QoMEX 2025 (Preprint)</span>
+                </div>
+                <i class="fas fa-external-link-alt"></i>
+            </a>
+
+            <a href="https://sites.hslu.ch/immersive-realities/the-planica-experience/" class="work-item" target="_blank">
+                <div class="work-info">
+                    <h5>VR Planica: Gaussian Splatting Workflows for Immersive Storytelling</h5>
+                    <p>Journalistic VR experience of the Planica ski jump that combines Gaussian splatting, volumetric video, meshes, and video for immersive storytelling.</p>
+                    <span class="work-venue">IMX Workshops 2025</span>
+                </div>
+                <i class="fas fa-external-link-alt"></i>
+            </a>
+
+            <a href="https://sites.hslu.ch/immersive-realities/vemar-affordable-workflows-for-volumetric-video-applications-in-xr-to-enhance-museum-experiences/" class="work-item" target="_blank">
+                <div class="work-info">
+                    <h5>VEMAR – A Volumetric Video Application to Enhance Museum Experiences</h5>
+                    <p>Demonstrates affordable, smartphone-based volumetric video workflows and their integration into an AR museum application with life-sized holograms of artists.</p>
+                    <span class="work-venue">VRST 2024</span>
+                </div>
+                <i class="fas fa-external-link-alt"></i>
+            </a>
+
+            <a href="https://doi.org/10.5594/JMI.2025/GLNG7938" class="work-item" target="_blank">
+                <div class="work-info">
+                    <h5>VVGLTF: Efficient Streaming of Volumetric Video with GLTF</h5>
+                    <p>Introduces VVGLTF, an extension of glTF and a streaming system for efficient delivery of volumetric video across varying network conditions.</p>
+                    <span class="work-venue">SMPTE Motion Imaging Journal 2025</span>
+                </div>
+                <i class="fas fa-external-link-alt"></i>
+            </a>
+        </div>
+    </div>
+</div>
+
+<main id="main-content">
+    <section class="hero">
+        <div class="hero-body">
+            <div class="container is-max-desktop">
+                <div class="columns is-centered">
+                    <div class="column has-text-centered">
+                        <h1 class="title is-1 publication-title">A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats</h1>
+                        <div class="is-size-5 publication-authors">
+                            <span class="author-block">
+                                <a href="mailto:athanasios.charisoudis@epfl.ch" target="_blank">Athanasios Charisoudis</a><sup>1,2</sup>,
+                            </span>
+                            <span class="author-block">
+                                <a href="mailto:simone.croci@hslu.ch" target="_blank">Simone Croci</a><sup>2</sup>,
+                            </span>
+                            <span class="author-block">
+                                <a href="mailto:kityung.lam@hslu.ch" target="_blank">Lam Kit Yung</a><sup>2</sup>,
+                            </span>
+                            <span class="author-block">
+                                <a href="mailto:pascal.frossard@epfl.ch" target="_blank">Pascal Frossard</a><sup>1</sup>,
+                            </span>
+                            <span class="author-block">
+                                <a href="mailto:aljosa.smolic@hslu.ch" target="_blank">Aljosa Smolic</a><sup>2</sup>
+                            </span>
+                        </div>
+
+                        <div class="is-size-5 publication-authors">
+                            <span class="author-block">
+                                <sup>1</sup> École Polytechnique Fédérale de Lausanne (EPFL)<br>
+                                <sup>2</sup> Lucerne University of Applied Sciences and Arts (HSLU)<br><br>
+                                CVMP 2025
+                            </span>
+                        </div>
+
+
+                        <div class="column has-text-centered">
+                            <div class="publication-links">
+                                <!-- Paper link: using DOI from the PDF -->
+                                <span class="link-block">
+                                    <a href="https://doi.org/10.1145/3756863.3769713" target="_blank"
+                                       class="external-link button is-normal is-rounded is-dark">
+                                        <span class="icon">
+                                          <i class="fas fa-file-pdf"></i>
+                                        </span>
+                                        <span>Paper (ACM / DOI)</span>
+                                    </a>
+                                </span>
+
+                                <!-- Code: placeholder until repo is public -->
+                                <span class="link-block">
+                                    <a href="https://github.com/YOUR REPO HERE" target="_blank"
+                                       class="external-link button is-normal is-rounded is-dark">
+                                        <span class="icon">
+                                          <i class="fab fa-github"></i>
+                                        </span>
+                                        <span>Code (Open-source pipeline)</span>
+                                    </a>
+                                </span>
+
+                                <!-- arXiv: kept as placeholder if/when an arXiv version exists -->
+                                <span class="link-block">
+                                    <a href="#" onclick='alert("arXiv submission under review. Link will be updated soon!");return false;'
+                                       class="external-link button is-normal is-rounded is-dark">
+                                      <span class="icon">
+                                        <i class="ai ai-arxiv"></i>
+                                      </span>
+                                      <span>arXiv</span>
+                                    </a>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+
+    <!-- Teaser image -->
+    <section class="hero teaser">
+        <div class="container is-max-desktop">
+            <div class="hero-body">
+                <figure class="paper-figure">
+                    <a class="magnifier-thumb-wrapper" href="#" onclick="return false;" aria-label="FaVoRe teaser">
+                        <span
+                            data-src="static/images/teaser_default.jpg"
+                            data-alt="FaVoRe teaser"
+                            data-srcset="static/images/teaser_small.jpg 600w, static/images/teaser_default.jpg 1920w"
+                            data-title="FaVoRe teaser"
+                            data-hr="static/images/teaser_large.jpg"
+                            class="js-lazy-magnifier"
+                        ></span>
+                    </a>
+                    <figcaption>
+                        Our pipeline captures human performances with 6–12 RGB-D or RGB-only cameras and reconstructs dynamic point clouds and Gaussian splats in real time for on-location preview and standards-compliant export.
+                    </figcaption>
+                </figure>
+            </div>
+        </div>
+    </section>
+    <!-- End teaser video -->
+
+    <!-- Paper abstract -->
+    <section class="section hero is-light">
+        <div class="container is-max-desktop">
+            <div class="columns is-centered has-text-centered">
+                <div class="column is-four-fifths">
+                    <h2 class="title is-3">Abstract</h2>
+                    <div class="content has-text-justified">
+                        <p>
+                            We present a fast and efficient volumetric capture and reconstruction system that processes either RGB-D or RGB-only input to generate 3D representations in the form of point clouds and Gaussian splats. For Gaussian splat reconstructions, we took the GPS-Gaussian regressor and improved it, enabling high-quality reconstructions with minimal overhead. The system is designed for easy setup and deployment, supporting in-the-wild operation under
+                            uncontrolled illumination and arbitrary backgrounds, as well as flexible camera configurations, including sparse setups, arbitrary camera numbers and baselines. Captured data can be exported in standard formats such as PLY, MPEG V-PCC, and SPLAT, and visualized through a web-based viewer or Unity/Unreal plugins. A live on-location preview of both input and reconstruction is available at 5–10 FPS. We present qualitative findings focused on
+                            deployability and targeted ablations. The complete framework is open-source, facilitating reproducibility and further research.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <!-- End paper abstract -->
+
+
+    <!-- Image carousel -->
+    <section class="section hero is-small">
+        <div class="container is-max-desktop">
+            <div class="columns is-centered has-text-centered">
+                <div class="column">
+                    <h2 class="title is-3">Pipeline</h2>
+                    <figure class="paper-figure">
+                        <a class="magnifier-thumb-wrapper" href="#" onclick="return false;" aria-label="FaVoRe pipeline">
+                            <span
+                                data-src="static/images/pipeline_default.jpg"
+                                data-alt="FaVoRe pipeline"
+                                data-srcset="static/images/pipeline_small.jpg 600w, static/images/pipeline_default.jpg 1920w"
+                                data-title="FaVoRe pipeline"
+                                data-hr="static/images/pipeline_large.jpg"
+                                class="js-lazy-magnifier"
+                            ></span>
+                        </a>
+                        <figcaption>
+                            Left: capture in action. Right: pipeline overview (data flow from left to right). Per-camera RGB-D/RGB inputs are processed in parallel; vertical bars indicate synchronization points. Segmentation and depth processing run in parallel, then point-cloud and Gaussian-splat reconstructions are computed in parallel. A live monitor shows reconstruction previews at 5 to 10 FPS, cycling across input cameras; after processing, teaser clips and reconstructions are served in the web viewer.
+                        </figcaption>
+                    </figure>
+                </div>
+            </div>
+
+            <div class="columns is-centered has-text-centered">
+                <div class="column">
+                    <h3>RGB Processing</h3>
+                    <figure class="paper-figure">
+                        <a class="magnifier-thumb-wrapper" href="#" onclick="return false;" aria-label="Color processing example">
+                            <span
+                                data-src="static/images/color_processing_default.jpg"
+                                data-alt="FaVoRe color processing example"
+                                data-srcset="static/images/color_processing_small.jpg 600w, static/images/color_processing_default.jpg 1920w"
+                                data-title="FaVoRe color processing example"
+                                data-hr="static/images/color_processing_large.jpg"
+                                class="js-lazy-magnifier"
+                            ></span>
+                        </a>
+                        <figcaption>
+                            Color cues for two sample image pairs. From left to right: color, mask, optical flow, disparity from RAFT-Stereo <sup>[Lipson et al. 2021]</sup> and from FoundationStereo <sup>[Wen et al. 2025]</sup>. RAFT-Stereo was trained on human data only, predicting more accurate disparity ranges.
+                        </figcaption>
+                    </figure>
+                </div>
+                <div class="column">
+                    <h3>Depth Processing</h3>
+                    <figure class="paper-figure">
+                        <a class="magnifier-thumb-wrapper" href="#" onclick="return false;" aria-label="Depth filtering example">
+                            <span
+                                data-src="static/images/depth_filtering_default.jpg"
+                                data-alt="FaVoRe depth processing example"
+                                data-srcset="static/images/depth_filtering_small.jpg 600w, static/images/depth_filtering_default.jpg 1920w"
+                                data-title="FaVoRe depth processing example"
+                                data-hr="static/images/depth_filtering_large.jpg"
+                                class="js-lazy-magnifier"
+                            ></span>
+                        </a>
+                        <figcaption>
+                            Sensor depth (left block): raw, spatially filtered (BS), and spatio-temporally filtered (BS+T). Stereo-estimated depth (right block) is computed from rectified pairs and shown without bilateral filtering.
+                        </figcaption>
+                    </figure>
+                </div>
+            </div>
+        </div>
+    </section>
+    <!-- End image carousel -->
+
+    <!-- Video carousel -->
+    <section class="hero is-small">
+        <div class="hero-body">
+            <div class="container">
+                <div class="is-centered has-text-centered">
+                    <h2 class="title is-3">Video Reconstruction Samples</h2>
+                </div>
+                <center>
+                <div id="results-carousel" class="carousel results-carousel" style="max-width: 800px!important;">
+                    <div class="item item-video1">
+                        <video poster="" id="video1" controls muted loop height="60%" preload="metadata">
+                            <source src="static/reconstructions/Thanos_2_Perf_1/teaser_grid_1200_300.mp4" type="video/mp4">
+                        </video>
+                    </div>
+                    <div class="item item-video2">
+                        <video poster="" id="video2" controls muted loop height="60%" preload="metadata">
+                            <source src="static/reconstructions/Philipp_1_Perf_6/teaser_grid_0400_300.mp4" type="video/mp4">
+                        </video>
+                    </div>
+                    <div class="item item-video3">
+                        <video poster="" id="video3" controls muted loop height="60%" preload="metadata">
+                            <source src="static/reconstructions/Simone_1_Perf_2/teaser_grid_0850_300.mp4" type="video/mp4">
+                        </video>
+                    </div>
+                    <div class="item item-video4">
+                        <video poster="" id="video4" controls muted loop height="60%" preload="metadata">
+                            <source src="static/reconstructions/Nathalie_1_Perf_3/teaser_grid_0570_300.mp4" type="video/mp4">
+                        </video>
+                    </div>
+                </div>
+                </center>
+            </div>
+        </div>
+    </section>
+    <!-- Video carousel -->
+
+    <!-- Interactive viewer -->
+    <section class="hero is-small">
+        <div class="hero-body">
+            <div class="container">
+                <div class="is-centered has-text-centered">
+                    <h2 class="title is-3">Interactive Reconstruction Viewer</h2>
+                </div>
+                <div id="pcv"
+                     data-session="Thanos_2_Perf_1"
+                     data-modality="pcd"
+                     data-depth="bilateral_temporal"
+                     style="height:600px"></div>
+            </div>
+        </div>
+    </section>
+    <!-- End interactive viewer -->
+
+
+<!--    &lt;!&ndash; Paper poster &ndash;&gt;-->
+<!--    <section class="hero is-small is-light">-->
+<!--        <div class="hero-body">-->
+<!--            <div class="container">-->
+<!--                <h2 class="title">Poster</h2>-->
+
+<!--                &lt;!&ndash; Replace with your actual poster PDF when available &ndash;&gt;-->
+<!--                <iframe src="static/pdfs/sample.pdf" width="100%" height="550">-->
+<!--                </iframe>-->
+
+<!--            </div>-->
+<!--        </div>-->
+<!--    </section>-->
+<!--    &lt;!&ndash;End paper poster &ndash;&gt;-->
+
+
+    <!--BibTex citation -->
+    <section class="section" id="BibTeX">
+        <div class="container is-max-desktop content">
+            <div class="bibtex-header">
+                <h2 class="title">BibTeX</h2>
+                <button class="copy-bibtex-btn" onclick="copyBibTeX()" title="Copy BibTeX to clipboard">
+                    <i class="fas fa-copy"></i>
+                    <span class="copy-text">Copy</span>
+                </button>
+            </div>
+            <pre id="bibtex-code"><code>@inproceedings{10.1145/3756863.3769713,
+    author = {Charisoudis, Athanasios and Croci, Simone and Lam, Kit Yung and Frossard, Pascal and Smolic, Aljosa},
+    title = {A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats},
+    year = {2025},
+    isbn = {9798400721175},
+    publisher = {Association for Computing Machinery},
+    address = {New York, NY, USA},
+    url = {https://doi.org/10.1145/3756863.3769713},
+    doi = {10.1145/3756863.3769713},
+    abstract = {We present a fast and efficient volumetric capture and reconstruction system that processes either RGB-D or RGB-only input to generate 3D representations in the form of point clouds and Gaussian splats. For Gaussian splat reconstructions, we took the GPS-Gaussian regressor and improved it, enabling high-quality reconstructions with minimal overhead. The system is designed for easy setup and deployment, supporting in-the-wild operation under uncontrolled illumination and arbitrary backgrounds, as well as flexible camera configurations, including sparse setups, arbitrary camera numbers and baselines. Captured data can be exported in standard formats such as PLY, MPEG V-PCC, and SPLAT, and visualized through a web-based viewer or Unity/Unreal plugins. A live on-location preview of both input and reconstruction is available at 5–10 FPS. We present qualitative findings focused on deployability and targeted ablations. The complete framework is open-source, facilitating reproducibility and further research.},
+    booktitle = {Proceedings of the 22nd ACM SIGGRAPH European Conference on Visual Media Production},
+    articleno = {9},
+    numpages = {11},
+    keywords = {Volumetric video capture, point clouds, Gaussian splats, dynamic reconstruction},
+    series = {CVMP '25}
+}</code></pre>
+        </div>
+    </section>
+    <!--End BibTex citation -->
+
+
+    <footer class="footer">
+        <div class="container">
+            <div class="columns is-centered">
+                <div class="column is-8">
+                    <div class="content">
+                        <p>Built using the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank">Academic Project Page Template</a> which was adopted from <a href="https://nerfies.github.io" target="_blank">Nerfies</a>.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </footer>
+</main>
+</body>
+
+<script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.180.0/build/three.module.js",
+        "three/examples/jsm/controls/OrbitControls.js": "https://unpkg.com/three@0.180.0/examples/jsm/controls/OrbitControls.js",
+        "three/examples/jsm/loaders/PLYLoader.js": "https://unpkg.com/three@0.180.0/examples/jsm/loaders/PLYLoader.js",
+        "gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/gaussian-splats-3d@0.0.5/build/gaussian-splats-3d.module.min.js",
+        "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/0.1.10/spark.module.js"
+      }
+    }
+</script>
+
+<script type="module">
+    /* ===== Imports ===== */
+    import * as THREE from "three";
+    import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+    import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
+    import { SplatLoader, SplatMesh, SplatFileType } from "@sparkjsdev/spark";
+
+    /* ===== Config (fixed bases) ===== */
+    const el = document.getElementById("pcv");
+    const urlQ = new URLSearchParams(location.search);
+    const SESSION = urlQ.get("session") ?? el.dataset.session ?? "";
+    const DEPTH   = urlQ.get("depth")   ?? el.dataset.depth   ?? "bilateral_temporal";
+
+    const PCD_BASE = (sess, depth) => `/static/reconstructions/${encodeURIComponent(sess)}/pcd_${depth}`;
+    const GS_BASE  = (sess, depth) => `/static/reconstructions/${encodeURIComponent(sess)}/gs_${depth}`;
+
+    /* ===== Safe PLY parsing ===== */
+    const plyLoader = new PLYLoader();
+    async function fetchArrayBuffer(url){ const r = await fetch(url, {cache:"no-cache"}); return r.ok ? r.arrayBuffer() : null; }
+    function looksLikePLY(ab){
+        if (!ab || ab.byteLength < 8) return false;
+        const head = new TextDecoder().decode(new Uint8Array(ab,0,Math.min(64,ab.byteLength)));
+        return head.startsWith("ply");
+    }
+    function sanitizeGeometryInPlace(geom, tag=""){
+        const pos = geom.getAttribute("position");
+        if (!pos){ console.warn(`[sanitize] ${tag}: no position`); geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(),0); return {valid:0,dropped:0}; }
+        const N = pos.count, keep = new Uint8Array(N); let keepN=0, dropped=0;
+        for (let i=0;i<N;i++){ const x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i); if (Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z)){ keep[i]=1; keepN++; } else dropped++; }
+        if (dropped===0) return {valid:N,dropped:0};
+        if (keepN===0){ console.warn(`[sanitize] ${tag}: all invalid`); geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(),0); return {valid:0,dropped:N}; }
+        const newPos = new Float32Array(keepN*3);
+        const colAttr = geom.getAttribute("color");
+        const norAttr = geom.getAttribute("normal");
+        const newCol = colAttr ? new Uint8Array(keepN*3) : null;
+        const newNor = norAttr ? new Float32Array(keepN*3) : null;
+        const to8 = v => Math.max(0,Math.min(255,Math.round(v*255)));
+        for (let i=0,w=0;i<N;i++){
+            if (!keep[i]) continue;
+            const j=i*3,k=w*3;
+            newPos[k]=pos.array[j]; newPos[k+1]=pos.array[j+1]; newPos[k+2]=pos.array[j+2];
+            if (newCol){ newCol[k]=to8(colAttr.getX(i)); newCol[k+1]=to8(colAttr.getY(i)); newCol[k+2]=to8(colAttr.getZ(i)); }
+            if (newNor){ newNor[k]=norAttr.getX(i); newNor[k+1]=norAttr.getY(i); newNor[k+2]=norAttr.getZ(i); }
+            w++;
+        }
+        geom.deleteAttribute("position"); geom.setAttribute("position", new THREE.BufferAttribute(newPos,3));
+        if (newCol){ geom.deleteAttribute("color"); geom.setAttribute("color", new THREE.Uint8BufferAttribute(newCol,3,true)); }
+        if (newNor){ geom.deleteAttribute("normal"); geom.setAttribute("normal", new THREE.BufferAttribute(newNor,3)); }
+        return {valid:keepN,dropped};
+    }
+    function ensureSafeBounds(geom){
+        try{
+            geom.computeBoundingBox?.();
+            const bb = geom.boundingBox;
+            if (bb && isFinite(bb.min.x) && isFinite(bb.max.x)){
+                const c = bb.getCenter(new THREE.Vector3());
+                const r = bb.getSize(new THREE.Vector3()).length()*0.5 || 0;
+                geom.boundingSphere = new THREE.Sphere(c,r);
+                return;
+            }
+        }catch{}
+        geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(),1e-6);
+    }
+    async function loadPLYChecked(url){
+        const ab = await fetchArrayBuffer(url);
+        if (!ab || !looksLikePLY(ab)) return null;
+        const geom = plyLoader.parse(ab);
+        const { valid } = sanitizeGeometryInPlace(geom, url);
+        if (valid === 0) return null;
+        ensureSafeBounds(geom);
+        return geom;
+    }
+
+    /* ===== HUD (minimal) ===== */
+    const hud = document.createElement("div");
+    hud.className = "hud";
+    hud.innerHTML = `
+    <div style="display:flex;align-items:center;gap:.6rem">
+      <strong>Viewer</strong>
+      <div id="mode-switch" style="display:flex;gap:.8rem;">
+        <label style="cursor:pointer;"><input type="radio" name="mode" value="points" checked> Points</label>
+        <label style="cursor:pointer;"><input type="radio" name="mode" value="splats"> Splats</label>
+      </div>
+    </div>
+    <div class="row"><span>Status:</span><span id="hud-status">Initializing…</span></div>`;
+    el.append(hud);
+    const setStatus = s => hud.querySelector("#hud-status").textContent = s;
+
+    /* ===== Tunables ===== */
+    const POINT_SIZE = 0.018;
+    const APPLY_S_FLIP_POINTS = true;
+    const APPLY_S_FLIP_SPLATS = true;
+    const RAIL_SAMPLES = 300;
+    const SWITCH_HYSTERESIS = 0.15;
+    const MAX_CONCURRENT_LOADS = 2;
+    const NEAR_PLANE = 0.01;
+
+    /* ===== OpenCV -> OpenGL (manifest pose) ===== */
+    const S3 = new THREE.Matrix3().set(1,0,0, 0,-1,0, 0,0,-1);
+    const mat3FromQuat = q => new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
+    const toOpenGL_R_c2w = (Rcv) => { const SR = new THREE.Matrix3().multiplyMatrices(S3,Rcv); return new THREE.Matrix3().multiplyMatrices(SR,S3); };
+    const quatWXYZ_to_THREE = ([w,x,y,z]) => new THREE.Quaternion(x,y,z,w);
+    function quatFromMat3(R){
+        const X=new THREE.Vector3(1,0,0).applyMatrix3(R).normalize();
+        const Y=new THREE.Vector3(0,1,0).applyMatrix3(R).normalize();
+        const Z=new THREE.Vector3(0,0,1).applyMatrix3(R).normalize();
+        const m4 = new THREE.Matrix4().makeBasis(X,Y,Z);
+        return new THREE.Quaternion().setFromRotationMatrix(m4);
+    }
+    function poseFromManifest(rot_wxyz, t_cv, manifestIsC2W=true){
+        const q_cv = quatWXYZ_to_THREE(rot_wxyz);
+        let R_cv = mat3FromQuat(q_cv);
+        if (!manifestIsC2W) R_cv = new THREE.Matrix3().copy(R_cv).transpose();
+        const R_gl = toOpenGL_R_c2w(R_cv);
+        const t_gl = new THREE.Vector3(t_cv[0], -t_cv[1], -t_cv[2]);
+        const q_gl = quatFromMat3(R_gl);
+        return { position:t_gl, quaternion:q_gl };
+    }
+
+    /* ===== Three boilerplate ===== */
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setPixelRatio(devicePixelRatio);
+    renderer.setSize(el.clientWidth, el.clientHeight);
+    renderer.setClearColor(0x0B0B0B, 1);
+    el.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0B0B0B);
+
+    const camera = new THREE.PerspectiveCamera(52, el.clientWidth/el.clientHeight, NEAR_PLANE, 5000);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enablePan = false;
+    controls.enableDamping = true;
+    controls.enableZoom = true;
+    controls.zoomSpeed = 1.0;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 0.15;
+    controls.maxDistance = 6.0;
+    controls.minPolarAngle = THREE.MathUtils.degToRad(10);
+    controls.maxPolarAngle = THREE.MathUtils.degToRad(170);
+
+    addEventListener("resize", ()=>{
+        camera.aspect = el.clientWidth/el.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(el.clientWidth, el.clientHeight);
+        kickRender();
+    });
+
+    /* ===== Scene graph ===== */
+    const contentRoot = new THREE.Group();
+    scene.add(contentRoot);
+
+    const pointsGroup = new THREE.Group();
+    contentRoot.add(pointsGroup);
+
+    const splatsGroup = new THREE.Group();
+    splatsGroup.visible = false;
+    contentRoot.add(splatsGroup);
+
+    const frustaGroup = new THREE.Group();
+    contentRoot.add(frustaGroup);
+
+    const railDebug = new THREE.Group();
+    railDebug.visible = false;
+    scene.add(railDebug);
+    addEventListener("keydown", e => { if (e.key.toLowerCase()==="r") railDebug.visible = !railDebug.visible; });
+
+    function drawRailDebug(positionsArray, samplesArray){
+        railDebug.clear();
+        if (!samplesArray?.length) return;
+        railDebug.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(samplesArray),
+            new THREE.LineBasicMaterial({color:0x22aaff})));
+        railDebug.add(new THREE.Points(new THREE.BufferGeometry().setFromPoints(samplesArray),
+            new THREE.PointsMaterial({size:0.01,sizeAttenuation:false,color:0xffffff})));
+        if (positionsArray?.length){
+            railDebug.add(new THREE.Points(new THREE.BufferGeometry().setFromPoints(positionsArray),
+                new THREE.PointsMaterial({size:0.02,sizeAttenuation:false,color:0x00ff88})));
+        }
+    }
+
+    /* ===== State ===== */
+    const gtCams = new Map();     // id -> { position, quaternion, intrinsics }
+    const plyPoints = new Map();  // id -> THREE.Points
+    const splatByCam = new Map(); // id -> SplatMesh
+
+    let railPts = null, lastRailPositions = [];
+    let railIndex = 0, activeCamId = null;
+    let stopRAF=false, Qfix = new THREE.Quaternion();
+    let currentMode = "points";
+    let splatsPreloadPromise = null;
+    let firstSplatCompiled = false;
+    let globalCamMetas = [];
+
+    /* ===== Helpers ===== */
+    function makeFrustum(cam){
+        const { position, quaternion, intrinsics } = cam;
+        if (!intrinsics) return null;
+        const { w,h,fx,fy } = intrinsics;
+        if (!(w>0 && h>0 && fx>0 && fy>0)) return null;
+        const n=0.08, widthNear=(n*w)/fx, heightNear=(n*h)/fy;
+        const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(quaternion).normalize();
+        const right=new THREE.Vector3(1,0,0).applyQuaternion(quaternion).normalize();
+        const up=new THREE.Vector3(0,1,0).applyQuaternion(quaternion).normalize();
+        const c = position.clone().addScaledVector(fwd,n);
+        const hx = widthNear*0.5*0.6, hy = heightNear*0.5*0.6;
+        const p00=c.clone().addScaledVector(right,-hx).addScaledVector(up,+hy);
+        const p10=c.clone().addScaledVector(right,+hx).addScaledVector(up,+hy);
+        const p11=c.clone().addScaledVector(right,+hx).addScaledVector(up,-hy);
+        const p01=c.clone().addScaledVector(right,-hx).addScaledVector(up,-hy);
+        const verts=new Float32Array([
+            position.x,position.y,position.z, p00.x,p00.y,p00.z,
+            position.x,position.y,position.z, p10.x,p10.y,p10.z,
+            position.x,position.y,position.z, p11.x,p11.y,p11.z,
+            position.x,position.y,position.z, p01.x,p01.y,p01.z,
+            p00.x,p00.y,p00.z, p10.x,p10.y,p10.z,
+            p10.x,p10.y,p10.z, p11.x,p11.y,p11.z,
+            p11.x,p11.y,p11.z, p01.x,p01.y,p01.z,
+            p01.x,p01.y,p01.z, p00.x,p00.y,p00.z
+        ]);
+        const g=new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(verts,3));
+        return new THREE.LineSegments(g, new THREE.LineBasicMaterial({color:0x888888, toneMapped:false}));
+    }
+    const worldCamPosOf = id => {
+        const cam = gtCams.get(id);
+        return cam ? cam.position.clone().applyQuaternion(Qfix) : null;
+    };
+
+    function kickRender(frames = 2) {
+        const draw = () => {
+            controls.update();
+            renderer.render(scene, camera);
+            if (--frames > 0) requestAnimationFrame(draw);
+        };
+        requestAnimationFrame(draw);
+    }
+
+    /* ---------- Plane fit (PCA) ---------- */
+    // Jacobi eigen for symmetric 3x3. Returns { vals:[...], vecs: THREE.Matrix3 whose COLUMNS are eigenvectors }
+    function jacobiEigenSym3(C){
+        // C is Float32Array [m00,m01,m02, m01,m11,m12, m02,m12,m22]
+        let A = [
+            [C[0], C[1], C[2]],
+            [C[1], C[4], C[5]],
+            [C[2], C[5], C[8]]
+        ];
+        const V = [[1,0,0],[0,1,0],[0,0,1]];
+
+        for (let it = 0; it < 24; it++){
+            // find largest off-diagonal
+            let p = 0, q = 1;
+            let max = Math.abs(A[0][1]);
+            if (Math.abs(A[0][2]) > max){ max = Math.abs(A[0][2]); p = 0; q = 2; }
+            if (Math.abs(A[1][2]) > max){ max = Math.abs(A[1][2]); p = 1; q = 2; }
+            if (max < 1e-12) break;
+
+            const app = A[p][p], aqq = A[q][q], apq = A[p][q];
+            const phi = 0.5 * Math.atan2(2*apq, (aqq - app));
+            const c = Math.cos(phi), s = Math.sin(phi);
+
+            // A <- J^T A J (update rows p,q, then cols p,q)
+            for (let k = 0; k < 3; k++){
+                const apk = A[p][k], aqk = A[q][k];
+                A[p][k] = c*apk - s*aqk;
+                A[q][k] = s*apk + c*aqk;
+            }
+            for (let k = 0; k < 3; k++){
+                const akp = A[k][p], akq = A[k][q];
+                A[k][p] = c*akp - s*akq;
+                A[k][q] = s*akp + c*akq;   // ← fixed
+            }
+
+            // V <- V J  (accumulate eigenvectors in columns)
+            for (let k = 0; k < 3; k++){
+                const vkp = V[k][p], vkq = V[k][q];
+                V[k][p] = c*vkp - s*vkq;
+                V[k][q] = s*vkp + c*vkq;
+            }
+        }
+
+        const vals = [A[0][0], A[1][1], A[2][2]];
+        const vecs = new THREE.Matrix3().set(
+            V[0][0], V[0][1], V[0][2],
+            V[1][0], V[1][1], V[1][2],
+            V[2][0], V[2][1], V[2][2]
+        );
+        return { vals, vecs };
+    }
+
+    function fitPlanePCA(points){
+        const n = points.length;
+        if (n < 3){
+            const c = points.reduce((a,p)=>a.add(p), new THREE.Vector3()).multiplyScalar(1/Math.max(1,n));
+            return { center: c, normal: new THREE.Vector3(0,1,0) };
+        }
+        // centroid
+        const c = points.reduce((a,p)=>a.add(p), new THREE.Vector3()).multiplyScalar(1/n);
+
+        // covariance
+        let xx=0,xy=0,xz=0, yy=0,yz=0, zz=0;
+        for (const p of points){
+            const x=p.x-c.x, y=p.y-c.y, z=p.z-c.z;
+            xx += x*x; xy += x*y; xz += x*z;
+            yy += y*y; yz += y*z; zz += z*z;
+        }
+        const invN = 1/n;
+        const C = new Float32Array([
+            xx*invN, xy*invN, xz*invN,
+            xy*invN, yy*invN, yz*invN,
+            xz*invN, yz*invN, zz*invN
+        ]);
+
+        const { vals, vecs } = jacobiEigenSym3(C);
+        // index of smallest eigenvalue → plane normal
+        let k = 0; if (vals[1] < vals[k]) k = 1; if (vals[2] < vals[k]) k = 2;
+
+        // columns of vecs are eigenvectors
+        const nrm = new THREE.Vector3(
+            vecs.elements[0 + 3*k],
+            vecs.elements[1 + 3*k],
+            vecs.elements[2 + 3*k]
+        ).normalize();
+
+        // make normal point roughly upward for a stable orientation (optional but nice for debug)
+        const worldUp = new THREE.Vector3(0,1,0);
+        if (nrm.dot(worldUp) < 0) nrm.multiplyScalar(-1);
+
+        return { center: c, normal: nrm };
+    }
+    const projectOntoPlane = (p,c,n)=> p.clone().sub(n.clone().multiplyScalar(p.clone().sub(c).dot(n)));
+
+    function nearestOnRailTo(v){
+        if (!railPts?.length) return {i:0,p:new THREE.Vector3()};
+        let best=0, bd2=Infinity;
+        for (let i=0;i<railPts.length;i++){ const d2=v.distanceToSquared(railPts[i]); if (d2<bd2){ bd2=d2; best=i; } }
+        return { i:best, p:railPts[best] };
+    }
+    function buildRailWorldSamplesFromCams(camIds){
+        const positions=[];
+        for (const id of camIds){ const p=worldCamPosOf(id); if (p && isFinite(p.x)&&isFinite(p.y)&&isFinite(p.z)) positions.push(p); }
+        for (let i=positions.length-1;i>0;i--){ if (positions[i].distanceToSquared(positions[i-1])<1e-12) positions.splice(i,1); }
+        if (positions.length<2){ railPts=null; drawRailDebug([],[]); return; }
+        const {center:pc, normal:pn}=fitPlanePCA(positions);
+        const projected=positions.map(p=>projectOntoPlane(p,pc,pn));
+        const curve=new THREE.CatmullRomCurve3(projected,false,"centripetal",0.25);
+        railPts=curve.getSpacedPoints(RAIL_SAMPLES);
+        lastRailPositions=projected.map(p=>p.clone());
+        drawRailDebug(lastRailPositions, railPts);
+        railIndex = nearestOnRailTo(camera.position).i;
+    }
+    function placeRigAtRailIndex(i){
+        if (!railPts?.length) return;
+        railIndex = Math.max(0, Math.min(railPts.length-1, i));
+        const newTarget = railPts[railIndex];
+        const prevTarget = controls.target.clone();
+        const rel = camera.position.clone().sub(prevTarget);
+        camera.position.copy(newTarget.clone().add(rel));
+        controls.target.copy(newTarget);
+        controls.update();
+    }
+
+    // NEW: ensure currently-selected camera is visible for the current mode,
+    // even when no "nearest camera" switch occurs.
+    function ensureActiveVisibility(){
+        if (!activeCamId) return;
+        const pts = plyPoints.get(activeCamId);
+        const spt = splatByCam.get(activeCamId);
+        if (pts) pts.visible = (currentMode === "points");
+        if (spt) spt.visible = (currentMode === "splats");
+    }
+
+    function selectNearestCamera(){
+        let bestId=null,bestD=Infinity;
+        for (const id of gtCams.keys()){
+            const p=worldCamPosOf(id); if (!p) continue;
+            const d=camera.position.distanceToSquared(p);
+            if (d<bestD){ bestD=d; bestId=id; }
+        }
+        if (!bestId) return;
+
+        if (!activeCamId){
+            activeCamId = bestId;
+            ensureActiveVisibility();
+            return;
+        }
+
+        const curPos = worldCamPosOf(activeCamId);
+        const curD   = curPos ? camera.position.distanceToSquared(curPos) : Infinity;
+
+        // If not switching (hysteresis), just ensure visibility for current mode.
+        if (bestId === activeCamId || bestD >= curD * (1 - SWITCH_HYSTERESIS)) {
+            ensureActiveVisibility();
+            return;
+        }
+
+        // Switching to a different cam: hide previous, show new in current mode.
+        const prevPts = plyPoints.get(activeCamId); if (prevPts) prevPts.visible=false;
+        const prevSpt = splatByCam.get(activeCamId); if (prevSpt) prevSpt.visible=false;
+
+        activeCamId = bestId;
+        ensureActiveVisibility();
+    }
+
+    /* ===== Manifest / frusta / leveling ===== */
+    async function loadManifestAndCams(){
+        if (!SESSION){ setStatus("Please provide ?session=…"); return []; }
+        setStatus("Loading manifest…");
+        const mf = await (await fetch(`/static/reconstructions/${encodeURIComponent(SESSION)}/manifest.json`)).json();
+        const cams = (mf.cameras || []);
+        if (!cams.length){ setStatus("No cameras in manifest"); return []; }
+
+        gtCams.clear(); frustaGroup.clear();
+        for (const c of cams){
+            const { position, quaternion } = poseFromManifest(c.rotation, c.position, true);
+            const cam = { id:c.id, position, quaternion, intrinsics:c.intrinsics, index:c.index };
+            gtCams.set(c.id, cam);
+            const fr = makeFrustum(cam);
+            if (fr) frustaGroup.add(fr);
+        }
+
+        // horizon level
+        const meanUp=new THREE.Vector3(), meanFwd=new THREE.Vector3();
+        for (const c of gtCams.values()){
+            meanUp.add(new THREE.Vector3(0,1,0).applyQuaternion(c.quaternion).normalize());
+            meanFwd.add(new THREE.Vector3(0,0,-1).applyQuaternion(c.quaternion).normalize());
+        }
+        meanUp.normalize(); meanFwd.normalize();
+        const worldUp=new THREE.Vector3(0,1,0);
+        let qTilt=new THREE.Quaternion(); if (meanUp.lengthSq()>1e-9) qTilt = new THREE.Quaternion().setFromUnitVectors(meanUp, worldUp);
+        let fTilt=meanFwd.clone().applyQuaternion(qTilt); fTilt.y=0;
+        let qHead=new THREE.Quaternion(); if (fTilt.lengthSq()>1e-9){ fTilt.normalize(); qHead=new THREE.Quaternion().setFromUnitVectors(fTilt,new THREE.Vector3(0,0,-1)); }
+        Qfix = qHead.multiply(qTilt);
+        contentRoot.quaternion.copy(Qfix);
+
+        buildRailWorldSamplesFromCams(cams.map(c=>c.id));
+
+        // Initial placement
+        {
+            const worldCamPts = cams.map(c => worldCamPosOf(c.id)).filter(Boolean);
+            const gTmp = new THREE.BufferGeometry().setFromPoints(worldCamPts);
+            gTmp.computeBoundingSphere();
+            const C = gTmp.boundingSphere?.center ?? new THREE.Vector3();
+            const R = gTmp.boundingSphere?.radius ?? 1.0;
+
+            let T = C.clone();
+            if (railPts && railPts.length) {
+                let best = 0, bd2 = Infinity;
+                for (let i=0;i<railPts.length;i++){
+                    const d2 = C.distanceToSquared(railPts[i]);
+                    if (d2 < bd2) { bd2 = d2; best = i; }
+                }
+                railIndex = best;
+                T = railPts[best].clone();
+            }
+            const dist = Math.max(1.25 * R, 0.6);
+            controls.target.copy(T);
+            camera.position.copy(T).add(new THREE.Vector3(0, 0, dist));
+            camera.up.set(0, 1, 0);
+            camera.lookAt(T);
+
+            controls.minDistance = Math.max(0.3 * R, 0.15);
+            controls.maxDistance = Math.max(6.0 * R, controls.minDistance + 0.01);
+            controls.update();
+        }
+
+        return cams.map(c=>({ id:c.id, index:c.index }));
+    }
+
+    /* ===== Points (PLY) ===== */
+    const unique = arr => [...new Set(arr)];
+    function candidatePlyUrlsForCam(camMeta){
+        const base = PCD_BASE(SESSION, DEPTH);
+        const id = camMeta.id || "";
+        const idx = (camMeta.index||"").replace(/^cam/i,"");
+        const cands=[];
+        if (idx) cands.push(`${base}/cam${idx}/main.ply`, `${base}/Cam${idx}/main.ply`);
+        if (id){
+            cands.push(`${base}/${encodeURIComponent(id)}/main.ply`);
+            if (id.includes("_")){
+                for (const part of id.split("_")){
+                    const p = part.startsWith("cam") ? part : `cam${part}`;
+                    cands.push(`${base}/${encodeURIComponent(p)}/main.ply`);
+                }
+            }
+            cands.push(`${base}/${encodeURIComponent(id)}_l/main.ply`);
+            cands.push(`${base}/${encodeURIComponent(id)}_r/main.ply`);
+        }
+        cands.push(`${base}/main.ply`);
+        return unique(cands);
+    }
+    async function loadAllPLY(camMetas){
+        setStatus("Loading points…");
+        const sem={cur:0,max:MAX_CONCURRENT_LOADS}, queue=[];
+        const submit=fn=>new Promise(res=>{ const run=async()=>{ sem.cur++; try{ await fn(); } finally{ sem.cur--; res(); maybeRun(); } }; queue.push(run); maybeRun(); });
+        const maybeRun=()=>{ while(sem.cur<sem.max && queue.length) queue.shift()(); };
+        const tasks=[];
+        for (const camMeta of camMetas){
+            tasks.push(submit(async ()=>{
+                const urls=candidatePlyUrlsForCam(camMeta);
+                let geom=null, chosen=null;
+                for (const url of urls){ geom=await loadPLYChecked(url); if (geom){ chosen=url; break; } }
+                if (!geom){ console.warn("No valid PLY for", camMeta, urls); return; }
+                if (APPLY_S_FLIP_POINTS){
+                    const a=geom.getAttribute("position").array;
+                    for (let i=0;i<a.length;i+=3){ a[i+1] = -a[i+1]; a[i+2] = -a[i+2]; }
+                    geom.attributes.position.needsUpdate = true; geom.computeBoundingSphere();
+                }
+                const colAttr=geom.getAttribute("color");
+                if (colAttr && !(colAttr.array instanceof Uint8Array)){
+                    const c=colAttr.array, u8=new Uint8Array(c.length);
+                    for (let i=0;i<c.length;i++) u8[i] = Math.max(0,Math.min(255,Math.round((colAttr.normalized||c instanceof Float32Array)? c[i]*255 : c[i])));
+                    geom.deleteAttribute("color"); geom.setAttribute("color", new THREE.Uint8BufferAttribute(u8,3,true));
+                }
+                const pts=new THREE.Points(geom, new THREE.PointsMaterial({ size:POINT_SIZE, vertexColors:Boolean(geom.getAttribute("color")), sizeAttenuation:true }));
+                pts.visible=false; pts.frustumCulled=false;
+                pointsGroup.add(pts);
+                plyPoints.set(camMeta.id, pts);
+                console.log("Loaded PLY", camMeta.id, "←", chosen);
+            }));
+        }
+        await Promise.all(tasks);
+        setStatus("Ready");
+        kickRender();
+    }
+
+    /* ===== Splats (Spark) ===== */
+    function candidateSplatUrlsForCam(camMeta){
+        const base = GS_BASE(SESSION, DEPTH);
+        const id = camMeta.id || "";
+        const idx = (camMeta.index||"").replace(/^cam/i,"");
+        const cands=[];
+        if (idx) cands.push(`${base}/cam${idx}/main.splat`, `${base}/Cam${idx}/main.splat`);
+        if (id){
+            cands.push(`${base}/${encodeURIComponent(id)}/main.splat`);
+            if (id.includes("_")){
+                for (const part of id.split("_")){
+                    const p = part.startsWith("cam") ? part : `cam${part}`;
+                    cands.push(`${base}/${encodeURIComponent(p)}/main.splat`);
+                }
+            }
+            cands.push(`${base}/${encodeURIComponent(id)}_l/main.splat`);
+            cands.push(`${base}/${encodeURIComponent(id)}_r/main.splat`);
+        }
+        cands.push(`${base}/main.splat`);
+        return unique(cands);
+    }
+    async function loadAllSplats(camMetas){
+        setStatus("Loading splats…");
+        const loader = new SplatLoader();
+        const tasks = camMetas.map(async (camMeta)=>{
+            const urls = candidateSplatUrlsForCam(camMeta);
+            for (const url of urls){
+                try{
+                    const packed = await loader.loadAsync(url);
+                    const mesh = new SplatMesh({ packedSplats: packed, fileType: SplatFileType.SPLAT });
+                    mesh.frustumCulled = false;
+                    if (APPLY_S_FLIP_SPLATS) mesh.scale.set(1,-1,-1);
+                    // visible immediately if this cam is the active one and we're in splats mode
+                    mesh.visible = (currentMode === "splats" && camMeta.id === activeCamId);
+                    splatsGroup.add(mesh);
+                    splatByCam.set(camMeta.id, mesh);
+
+                    if (!firstSplatCompiled) {
+                        renderer.compile(scene, camera);
+                        firstSplatCompiled = true;
+                    }
+                    if (mesh.visible) {
+                        kickRender();
+                    }
+                    console.log("Loaded SPLAT", camMeta.id, "←", url);
+                    return;
+                }catch(e){ /* try next candidate */ }
+            }
+            console.warn("No .splat for", camMeta);
+        });
+        await Promise.all(tasks);
+        setStatus("Ready");
+        // ensure current active becomes visible once everything finished (in case it arrived late)
+        ensureActiveVisibility();
+        kickRender();
+    }
+
+    /* ===== NaN scan (for point geoms) ===== */
+    function debugScanForNaN(root){
+        root.traverse(o=>{
+            const g=o.geometry; if (!g?.isBufferGeometry) return;
+            const pos=g.getAttribute("position"); if (!pos) return;
+            for (let i=0;i<pos.count;i++){
+                if (!Number.isFinite(pos.getX(i))||!Number.isFinite(pos.getY(i))||!Number.isFinite(pos.getZ(i))){
+                    console.warn("NaN verts → hiding", o); o.visible=false; g.boundingSphere=new THREE.Sphere(new THREE.Vector3(),0); return;
+                }
+            }
+            if (!g.boundingSphere || !Number.isFinite(g.boundingSphere.radius)) ensureSafeBounds(g);
+        });
+    }
+
+    /* ===== Rail input: RMB drag + keys ===== */
+    renderer.domElement.addEventListener("contextmenu", e=>e.preventDefault());
+    let rmbDragging=false, lastX=0, accum=0;
+    const STEP_PER_PX=0.03;
+    function slideBy(deltaSamples){ if (railPts){ placeRigAtRailIndex(railIndex + deltaSamples); } kickRender(); }
+    renderer.domElement.addEventListener("pointerdown",(e)=>{
+        if (e.button===2){ rmbDragging=true; lastX=e.clientX; renderer.domElement.setPointerCapture(e.pointerId); }
+    });
+    renderer.domElement.addEventListener("pointermove",(e)=>{
+        if (!rmbDragging) return;
+        const dx=e.clientX-lastX; lastX=e.clientX;
+        accum += dx*STEP_PER_PX;
+        const step = accum|0;
+        if (step!==0){ slideBy(step); accum -= step; }
+    });
+    renderer.domElement.addEventListener("pointerup",(e)=>{
+        if (e.button===2){ rmbDragging=false; renderer.domElement.releasePointerCapture(e.pointerId); }
+    });
+    addEventListener("keydown",(e)=>{
+        const k=e.key.toLowerCase();
+        if (k==="arrowleft"||k==="a") slideBy(-2);
+        else if (k==="arrowright"||k==="d") slideBy(+2);
+        else if (k==="home") { placeRigAtRailIndex(0); kickRender(); }
+        else if (k==="end")  { placeRigAtRailIndex(railPts? railPts.length-1 : 0); kickRender(); }
+    });
+
+    /* ===== Mode switch ===== */
+    async function applyMode(mode){
+        currentMode = mode;
+        pointsGroup.visible = (mode==="points");
+        splatsGroup.visible = (mode==="splats");
+
+        if (mode === "splats") {
+            if (!splatsPreloadPromise) splatsPreloadPromise = loadAllSplats(globalCamMetas);
+            // if nothing is loaded yet, wait for first batch
+            if (splatsGroup.children.length === 0) { try { await splatsPreloadPromise; } catch {} }
+        }
+
+        // Ensure the currently active camera’s object is visible in this mode,
+        // even if nearest-camera selection didn’t change.
+        ensureActiveVisibility();
+        kickRender();
+    }
+    hud.querySelectorAll('#mode-switch input[name="mode"]').forEach(inp=>{
+        inp.addEventListener('change', async e=>{ if (e.target.checked) await applyMode(e.target.value); });
+    });
+
+    /* ===== Main ===== */
+    (async function main(){
+        try{
+            const camMetas = await loadManifestAndCams();
+            globalCamMetas = camMetas;
+            if (!camMetas.length){ setStatus("No cameras to load"); return; }
+
+            await loadAllPLY(camMetas);
+            debugScanForNaN(pointsGroup);
+
+            // Preload splats in the background
+            splatsPreloadPromise = loadAllSplats(camMetas).catch(console.warn);
+
+            // Select and reveal the initial camera in current mode (points)
+            selectNearestCamera();
+            ensureActiveVisibility();
+            kickRender();
+
+            const loop = ()=>{
+                if (stopRAF) return;
+                controls.update();
+
+                if (railPts?.length){
+                    const prevTarget=controls.target.clone();
+                    const { i, p } = nearestOnRailTo(camera.position);
+                    controls.target.copy(p);
+                    const rel=camera.position.clone().sub(prevTarget);
+                    const desired=p.clone().add(rel);
+                    camera.position.copy(desired);
+                    controls.update();
+                    railIndex=i;
+                }
+
+                // keep nearest object visible in current mode
+                selectNearestCamera();
+
+                renderer.render(scene,camera);
+                requestAnimationFrame(loop);
+            };
+            loop();
+
+            setStatus("Ready");
+        }catch(e){
+            console.error(e);
+            setStatus("Error: " + (e?.message || e));
+        }
+    })();
+
+    /* ===== Cleanup ===== */
+    addEventListener("beforeunload", ()=>{ stopRAF = true; });
+</script>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        if (typeof Justlazy === "undefined" || typeof window.CustomMagnifier === "undefined") {
+            return;
+        }
+
+        var placeholders = document.querySelectorAll(".js-lazy-magnifier");
+
+        for (var i = 0; i < placeholders.length; i++) {
+            (function (placeholder) {
+                var hrSrc = placeholder.getAttribute("data-hr");
+
+                Justlazy.registerLazyLoad(placeholder, {
+                    threshold: 200,
+                    onreplaceCallback: function () {
+                        var img = this;
+                        if (!img || img.tagName !== "IMG") {
+                            return;
+                        }
+                        window.CustomMagnifier.init(img, hrSrc);
+                    }
+                });
+            })(placeholders[i]);
+        }
+    });
+</script>
+
+</html>

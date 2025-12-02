@@ -1,0 +1,57 @@
+.cm-magnifier-container {
+    position: relative;
+    display: block;
+}
+
+.cm-magnifier-container img {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.cm-magnifier-toggle {
+    position: absolute;
+    right: 0.15rem;
+    bottom: 0.15rem;
+    z-index: 2;
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 999px;
+    border: none;
+    outline: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: #aaa;
+    cursor: default;
+    font-size: 1.1rem;
+}
+
+.cm-magnifier-toggle i {
+    pointer-events: none;
+}
+
+.cm-magnifier-toggle:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb;
+}
+
+.cm-magnifier-container:hover {
+    cursor: none;
+}
+
+.cm-magnifier-lens {
+    position: absolute;
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    pointer-events: none;
+    overflow: hidden;
+    background-repeat: no-repeat;
+    background-position: center center;
+    box-shadow: 0 12px 25px rgba(15, 23, 42, 0.45);
+    border: 1px solid rgba(189, 189, 189, 0.95);
+    background: white;
+    z-index: 2;
+    display: none;
+}
