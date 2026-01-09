@@ -7,7 +7,7 @@ This is the **official code repository** for the paper:
 > *European Conference on Visual Media Production (CVMP ’25)*  
 > DOI: [10.1145/3756863.3769713](https://doi.org/10.1145/3756863.3769713)
 
-Project page: (coming soon)  
+Project page: https://irc-hslu.github.io/capturestudio  
 Paper: https://doi.org/10.1145/3756863.3769713  
 
 ---
@@ -16,16 +16,13 @@ Paper: https://doi.org/10.1145/3756863.3769713
 
 The code for the HSLU CaptureStudio pipeline (capture, reconstruction, and export of dynamic point clouds and Gaussian splats) is currently being:
 
-- cleaned up and modularized
-- documented
-- prepared for a public release
-
-🧪 **Code release is in progress.**  
-Please check back later for:
-
-- installation instructions
-- samples and configuration files
-- scripts for reconstruction and export
+-[x] cleaned up and modularized
+-[x] documented
+-[x] prepared for a public release
+-[x] initial version out (v1)
+-[ ] incorporate v2 improvements (in progress)
+-[ ] complete requirements.txt
+-[ ] scripts for reconstruction and export
 
 ---
 
