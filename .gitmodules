@@ -1,0 +1,6 @@
+[submodule "resources/submodules/videoflow"]
+	path = resources/submodules/videoflow
+	url = https://github.com/XiaoyuShi97/VideoFlow.git
+[submodule "resources/submodules/foundationstereo"]
+	path = resources/submodules/foundationstereo
+	url = https://github.com/NVlabs/FoundationStereo.git
