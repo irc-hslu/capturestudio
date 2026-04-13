@@ -16,13 +16,13 @@ Paper: https://doi.org/10.1145/3756863.3769713
 
 The code for the HSLU CaptureStudio pipeline (capture, reconstruction, and export of dynamic point clouds and Gaussian splats) is currently being:
 
--[x] cleaned up and modularized
--[x] documented
--[x] prepared for a public release
--[x] initial version out (v1)
--[ ] incorporate v2 improvements (in progress)
--[ ] complete requirements.txt
--[ ] scripts for reconstruction and export
+- [x] cleaned up and modularized
+- [x] documented
+- [x] prepared for a public release
+- [x] initial version out (v1)
+- [ ] incorporate v2 improvements (in progress)
+- [ ] complete requirements.txt
+- [ ] scripts for reconstruction and export
 
 ---
 
