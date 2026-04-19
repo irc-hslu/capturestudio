@@ -26,6 +26,16 @@ The code for the HSLU CaptureStudio pipeline (capture, reconstruction, and expor
 
 ---
 
+## GPSGaussian Model Checkpoints
+
+The checkpoints for the **GPSGaussian** model variants used in the paper are hosted on Hugging Face:
+
+**Hugging Face:** https://huggingface.co/irc-hslu/GPSGaussian
+
+Please refer to the model card and repository contents there for the available variants and checkpoint files.
+
+---
+
 ## Early Access / Urgent Requests
 
 If you urgently need access to parts of the code, or have specific research / industry use cases, feel free to reach out:
