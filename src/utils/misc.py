@@ -1,6 +1,3 @@
-# COPYRIGHT 2024 by Athanasios Charisoudis <athanasios.charisoudis@ieee.org>
-# Licensed under the Apache License, Version 2.0 (the "License");
-# Original source: https://github.com/charisoudis/mdmc
 from __future__ import annotations
 
 import enum
@@ -42,9 +39,9 @@ warnings.filterwarnings("ignore")
 
 GLOBAL_LOGGER = None
 GLOBAL_ENV = None
-DETECTOR = None
+DETECTORS = None
 DETECTOR_CLASS_NAMES = None
-SEGMENTOR = None
+SEGMENTORS = None
 OF_ESTIMATOR = None
 OF_ESTIMATOR_PADDER = None
 DEPTH_FILTERERS: Dict[str, Optional[Any]] = {
@@ -762,28 +759,71 @@ def get_depth_filterer(filter_type: str) -> Optional[Any]:
         return DEPTH_FILTERERS[filter_type]
 
 
-def get_detector():
-    global DETECTOR, DETECTOR_CLASS_NAMES
+def get_detector(which: Literal['yolo', 'sam3'] = 'sam3', device: Union[str, Literal['cpu', 'cuda']] = 'cuda'):
+    global DETECTORS, DETECTOR_CLASS_NAMES
     with DETECTOR_LOCK:
-        if DETECTOR is None:
-            detector_path = PathUtils.checkpoints_path() / 'yolo' / 'yolo11x.pt'
-            from ultralytics import YOLO
-            DETECTOR = YOLO(detector_path).cuda()
-            DETECTOR_CLASS_NAMES = DETECTOR.model.names
-    return DETECTOR, DETECTOR_CLASS_NAMES
+        if DETECTORS is None or which not in DETECTORS:
+            if DETECTORS is None:
+                DETECTORS = {}
+
+            if which == 'yolo':
+                detector_path = PathUtils.checkpoints_path() / 'yolo' / 'yolo11x.pt'
+                from ultralytics import YOLO
+                DETECTORS[which] = YOLO(detector_path).to(device)
+                DETECTORS[which]._class_names = DETECTORS[which].model.names
+            elif which == 'sam3':
+                from sam3 import build_sam3_image_model
+                from sam3.model.sam3_image_processor import Sam3Processor
+                model = build_sam3_image_model(
+                    checkpoint_path=str(PathUtils.checkpoints_path() / "sam" / "sam3.pt"),
+                    eval_mode=True,
+                    device=device,
+                )
+                processor = Sam3Processor(model)
+                model._processor = processor
+                if not hasattr(model, "device"):
+                    model.device = device
+                # Minimal class catalog for compatibility with existing class-id resolution logic
+                sam3_class_list = [
+                    "person",
+                    "guitar",
+                    "guitar band",
+                    "drums",
+                ]
+                model._class_names = {i: n for i, n in enumerate(sam3_class_list)}
+                DETECTORS[which] = model
+            else:
+                raise ValueError(f"Unsupported detector type: {which}")
+
+        # Always return the correct class-name mapping for the selected detector
+        detector = DETECTORS[which]
+        DETECTOR_CLASS_NAMES = getattr(detector, "_class_names", DETECTOR_CLASS_NAMES)
+
+    return DETECTORS[which], DETECTOR_CLASS_NAMES
 
 
-def get_segmentor():
-    global SEGMENTOR
+
+def get_segmentor(which: Literal['sam2', 'sam3'] = 'sam3', **kwargs):
+    global SEGMENTORS
     with SEGMENTOR_LOCK:
-        if SEGMENTOR is None:
-            segmentor_paths = dict(
-                config_file='/' + str(PathUtils.checkpoints_path() / 'sam' / 'sam2.1_hiera_base_plus.yaml'),
-                ckpt_path=str(PathUtils.checkpoints_path() / 'sam' / 'sam2.1_hiera_base_plus.pt')
-            )
-            from sam2.build_sam import build_sam2_video_predictor
-            SEGMENTOR = build_sam2_video_predictor(**segmentor_paths, vos_optimized=True)
-    return SEGMENTOR
+        if SEGMENTORS is None or which not in SEGMENTORS:
+            if SEGMENTORS is None:
+                SEGMENTORS = {}
+            if which == 'sam2':
+                segmentor_paths = dict(
+                    config_file='/' + str(PathUtils.checkpoints_path() / 'sam' / 'sam2.1_hiera_base_plus.yaml'),
+                    ckpt_path=str(PathUtils.checkpoints_path() / 'sam' / 'sam2.1_hiera_base_plus.pt'),
+                )
+                from sam2.build_sam import build_sam2_video_predictor
+                SEGMENTORS[which] = build_sam2_video_predictor(**segmentor_paths, vos_optimized=True, **kwargs)
+            elif which == 'sam3':
+                ckpt = Path(env_get("SAM3_CKPT", str(PathUtils.checkpoints_path() / "sam" / "sam3.pt"))).resolve()
+                from sam3.model_builder import build_sam3_video_predictor
+                SEGMENTORS[which] = build_sam3_video_predictor(
+                    checkpoint_path=str(ckpt),
+                    **kwargs
+                )
+    return SEGMENTORS[which]
 
 
 def get_of_estimator():

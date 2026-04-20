@@ -8,7 +8,7 @@ import h5py
 import numpy as np
 
 from tasks import app, AutoRetryTask
-from utils.misc import log
+from utils.misc import log, PathUtils
 
 
 def sendfile_copy(src: Path, dst: Path):
@@ -245,7 +245,7 @@ def _from_nas_cache_h5_to_capturestudio_cache_raw(nas_cache_root: str, orbbec_id
     if not (capturestudio_cache_path.parent / 'session_metadata.json').exists():
         sendfile_copy(Path(nas_cache_root) / 'Orbbec_Fempto_Bolt' / orbbec_id / 'session_metadata.json', capturestudio_cache_path.parent / 'session_metadata.json')
 
-    all_h5_files = list(nas_cache_path.glob('*.h5'))
+    all_h5_files = sorted(nas_cache_path.glob('*.h5'), key=lambda x: int(x.stem.split('-')[0]))
     for h5_i, h5_path in enumerate(all_h5_files):
         # Unpack the h5 file to raw files
         with h5py.File(h5_path, 'r') as hf:
@@ -269,29 +269,41 @@ def _from_nas_cache_h5_to_capturestudio_cache_raw(nas_cache_root: str, orbbec_id
                     if modality in hf and color_ts in hf[modality]:
                         if not (capturestudio_cache_path / modality).exists():
                             (capturestudio_cache_path / modality).mkdir()
-                        modality_data = hf[modality][color_ts][:]
+                        modality_data = hf[modality][color_ts]
                         if modality == 'mask':
-                            mask_data = cv2.imdecode(modality_data, cv2.IMREAD_GRAYSCALE)
-                            cv2.imwrite(str(capturestudio_cache_path / 'mask' / f'{color_ts}.jpg'), mask_data, [cv2.IMWRITE_JPEG_QUALITY, 100])
+                            with open(capturestudio_cache_path / modality / f'{color_ts}.jpg', "wb") as f:
+                                f.write(modality_data[...].tobytes())
                         elif modality in ['flow_fwd', 'flow_bwd']:
-                            cv2.imwrite(str(capturestudio_cache_path / modality / f'{color_ts}.png'), modality_data)
+                            with open(capturestudio_cache_path / modality / f'{color_ts}.png', "wb") as f:
+                                f.write(modality_data[...].tobytes())
 
                 if 'depth' in hf:
                     depth_ts = depth_keys[i]
-                    depth = np.asarray(hf['depth'][depth_ts][:], dtype=np.uint16)
-                    if not (capturestudio_cache_path / 'depth').exists():
-                        (capturestudio_cache_path / 'depth').mkdir()
-                    depth = (depth.clip(0, 5_000).astype(float) * (65_535 / 5_000)).astype(np.uint16)
-                    cv2.imwrite(str(capturestudio_cache_path / 'depth' / f'{depth_ts}.png'), depth)
+                    depth_data = hf['depth'][depth_ts]
+                    depth_png_path = capturestudio_cache_path / 'depth' / f'{depth_ts}.png'
+                    # Depth datasets are stored either as:
+                    #  - uint8 1D array of PNG bytes (preferred for PNG storage), or
+                    #  - uint16 2D array of depth values (numeric storage)
+                    depth_data_is_png = (depth_data.dtype == np.uint8 and depth_data.ndim == 1)
+                    if depth_data_is_png:
+                        with open(depth_png_path, "wb") as f:
+                            f.write(depth_data[...].tobytes())
+                    else:
+                        depth = np.asarray(depth_data[:], dtype=np.uint16)
+                        if not (capturestudio_cache_path / 'depth').exists():
+                            (capturestudio_cache_path / 'depth').mkdir()
+                        PathUtils.write_file(depth_png_path, depth, png_type='depth')
 
                     # other depth modalities
                     for modality in ['depth_aligned', 'depth_filtering_bilateral_spatial', 'depth_filtering_bilateral_temporal']:
                         if modality in hf and depth_ts in hf[modality]:
-                            modality_data = np.asarray(hf[modality][depth_ts][:], dtype=np.uint16)
                             if not (capturestudio_cache_path / modality).exists():
                                 (capturestudio_cache_path / modality).mkdir()
                             # Assume that all depth modalities are encoded as 16-bit PNGs in the h5 file
-                            cv2.imwrite(str(capturestudio_cache_path / modality / f'{depth_ts}.png'), modality_data)
+                            modality_data_png_bytes = hf[modality][depth_ts]
+                            modality_png_path = capturestudio_cache_path / modality / f'{depth_ts}.png'
+                            with open(modality_png_path, "wb") as f:
+                                f.write(modality_data_png_bytes[...].tobytes())
     return True
 
 

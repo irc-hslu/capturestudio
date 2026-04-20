@@ -27,11 +27,11 @@ from celery import Celery, Task
 
 class AutoRetryTask(Task):
     autoretry_for = (TypeError,)
-    max_retries = 5
+    max_retries = 3
     retry_backoff = True
     retry_backoff_max = 100
     retry_jitter = False
-    default_retry_delay = 5
+    default_retry_delay = 60 * 60  # 1 hour
 
 
 app = Celery(
@@ -47,8 +47,11 @@ app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    task_acks_late=True,
-    worker_prefetch_multiplier=1,
+    task_acks_late=False,  # FIX: set to False if there are long-running tasks
+    worker_prefetch_multiplier=1,  # important for long tasks
+    task_track_started=True,
+    task_soft_time_limit=5400,  # 90 min
+    task_time_limit=21600,  # 6 hours
     imports=(
         "tasks.download",
         "tasks.synchronization",
@@ -56,6 +59,7 @@ app.conf.update(
         "tasks.preprocessing_color",
         "tasks.preprocessing_depth",
         "tasks.reconstruction",
+        "tasks.upload",
     ),
     task_queues=(
         Queue("cpu"),
@@ -64,19 +68,25 @@ app.conf.update(
     task_routes={
         "download.download_from_nas": {"queue": "cpu"},
         "preprocessing.color.generate_video": {"queue": "cpu"},
+        "preprocessing.color.interactively_annotate": {"queue": "cpu"},
         "preprocessing.color.compute_segmentation_mask": {"queue": "gpu"},
         "preprocessing.color.compute_optical_flow": {"queue": "gpu"},
         "preprocessing.depth.align_depth_to_color": {"queue": "cpu"},
         "preprocessing.depth.filter_depth": {"queue": "cpu"},
-        "synchronization.synchronize_frames": {"queue": "cpu"},
         "synchronization.generate_multiview_video": {"queue": "cpu"},
+        "synchronization.synchronize_frames": {"queue": "cpu"},
+        "synchronization.trim_frames": {"queue": "cpu"},
         "calibration.generate_caliscope_config": {"queue": "cpu"},
         "calibration.generate_caliscope_videos": {"queue": "cpu"},
+        "calibration.detect_corners_2d": {"queue": "cpu"},
+        "calibration.lift_corners_3d": {"queue": "cpu"},
+        "calibration.calibrate_hslu": {"queue": "cpu"},
         "reconstruction.pcd_reconstruction": {"queue": "cpu"},
         "reconstruction.gs_reconstruction": {"queue": "gpu"},
         "reconstruction.generate_teaser_video": {"queue": "cpu"},
         "reconstruction.generate_teaser_grid_video": {"queue": "cpu"},
         "reconstruction.link_to_webapp": {"queue": "cpu"},
+        "upload.upload_to_nas": {"queue": "cpu"},
     }
 )
 

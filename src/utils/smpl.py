@@ -1,6 +1,3 @@
-# COPYRIGHT 2024 by Athanasios Charisoudis <athanasios.charisoudis@ieee.org>
-# Licensed under the Apache License, Version 2.0 (the "License");
-# Original source: https://github.com/charisoudis/mdmc
 from __future__ import annotations
 
 import copy

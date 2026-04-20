@@ -10,6 +10,7 @@ from typing import Optional, List, Callable
 from typing import Tuple, Union, Dict, Literal, Any
 
 import cv2
+import kornia
 import matplotlib.pyplot as plt
 import numpy as np
 import toml
@@ -29,6 +30,8 @@ class CalibrationData:
     cam_names: List[str]  # (N,)
     image_size: torch.Tensor  # (N, 2) in (H, W) format
     _preprocessing_transforms: Optional[List[Callable]] = None
+    _is_prerotated: bool = False
+    _prerotation: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None
 
     def __getitem__(self, item) -> 'CalibrationData':
         # select index in transform arguments
@@ -51,7 +54,7 @@ class CalibrationData:
             _preprocessing_transforms=new_transforms
         )
 
-    def create_cameras(self, mean_idx: List[int] | Literal['all'] = 'all', device: Union[str, torch.device] = 'cpu', lib: str = 'pytorch3d') -> Tuple[Any, torch.Tensor, torch.Tensor]:
+    def create_cameras(self, mean_idx: List[int] | Literal['all'] = 'all', device: torch.device | str = 'cpu', lib: str = 'pytorch3d') -> Tuple[Any, torch.Tensor, torch.Tensor]:
         assert lib in ['open3d', 'pytorch3d'], f"Invalid library: {lib}. Choose 'pytorch3d' or 'kaolin'"
         from utils.vis import VisUtils
         if lib == 'open3d':
@@ -75,7 +78,7 @@ class CalibrationData:
         )
         return cameras, mean_look_at_point, mean_up_vector
 
-    def create_camera_plane(self, plane_idx: List[int] | Literal['all'] = 'all', device: Union[str, torch.device] = 'cpu') -> Tuple[torch.Tensor, torch.Tensor]:
+    def create_camera_plane(self, plane_idx: List[int] | Literal['all'] = 'all', device: torch.device | str = 'cpu') -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Fits a plane to the camera translation vectors using SVD.
 
@@ -239,64 +242,108 @@ class CalibrationData:
         CalibrationData
             A new CalibrationData object with rotated intrinsics and image_size.
         """
-        if rotate is None:
+        if rotate is None or self._is_prerotated:
             return self
 
-        K = self.intrinsics.clone()
-        Hpix = self.image_size[:, 0].to(dtype=K.dtype, device=K.device)  # H
-        Wpix = self.image_size[:, 1].to(dtype=K.dtype, device=K.device)  # W
+        K = self.intrinsics.clone()  # (N,3,3)
+        Tw2c = self.extrinsics_w2c.clone()  # (N,4,4)
+        image_size = self.image_size.clone()  # (N,2) [H,W]
 
-        # pull standard parameters (assumes zero skew)
-        fx = K[:, 0, 0].clone()
-        fy = K[:, 1, 1].clone()
-        cx = K[:, 0, 2].clone()
-        cy = K[:, 1, 2].clone()
+        device = K.device
+        dtype = K.dtype
+        N = K.shape[0]
 
-        K_new = torch.zeros_like(K)
-        K_new[:, 2, 2] = 1.0  # homogeneous coord
+        def _rz_torch(angle_deg: float) -> torch.Tensor:
+            a = torch.tensor(angle_deg * 3.141592653589793 / 180.0, dtype=dtype, device=device)
+            c, s = torch.cos(a), torch.sin(a)
+            R = torch.eye(3, dtype=dtype, device=device)
+            R[0, 0] = c
+            R[0, 1] = -s
+            R[1, 0] = s
+            R[1, 1] = c
+            return R
 
-        if rotate == '90_COUNTERCLOCKWISE':
-            # (u', v') = (v, W-1 - u), new size (H', W') = (W, H)
-            K_new[:, 0, 0] = fy
-            K_new[:, 1, 1] = fx
-            K_new[:, 0, 2] = cy
-            K_new[:, 1, 2] = (Wpix - 1.0) - cx
-            image_size_new = torch.stack([self.image_size[:, 1], self.image_size[:, 0]], dim=1)
+        def _Himg_torch(W: torch.Tensor, H: torch.Tensor, which: str) -> torch.Tensor:
+            """
+            Pixel-space homography p' = Himg p using 0-based integer pixel centers.
+            W, H are scalars (tensors) already on (dtype, device).
+            """
+            # offsets use H-1, W-1 switch to -0.5 if your pipeline is half-pixel-centered
+            offW = W - 1.0
+            offH = H - 1.0
 
-        elif rotate == '90_CLOCKWISE':
-            # (u', v') = (H-1 - v, u), new size (H', W') = (W, H)
-            K_new[:, 0, 0] = fy
-            K_new[:, 1, 1] = fx
-            K_new[:, 0, 2] = (Hpix - 1.0) - cy
-            K_new[:, 1, 2] = cx
-            image_size_new = torch.stack([self.image_size[:, 1], self.image_size[:, 0]], dim=1)
+            Himg = torch.eye(3, dtype=dtype, device=device)
+            if which == '90_CLOCKWISE':
+                # u' = -v + (H-1), v' = u
+                Himg[0, 0] = 0.0
+                Himg[0, 1] = -1.0
+                Himg[0, 2] = offH
+                Himg[1, 0] = 1.0
+                Himg[1, 1] = 0.0
+                Himg[1, 2] = 0.0
+            elif which == '90_COUNTERCLOCKWISE':
+                # u' =  v,          v' = -u + (W-1)
+                Himg[0, 0] = 0.0
+                Himg[0, 1] = 1.0
+                Himg[0, 2] = 0.0
+                Himg[1, 0] = -1.0
+                Himg[1, 1] = 0.0
+                Himg[1, 2] = offW
+            elif which == '180':
+                # u' = -u + (W-1), v' = -v + (H-1)
+                Himg[0, 0] = -1.0
+                Himg[0, 1] = 0.0
+                Himg[0, 2] = offW
+                Himg[1, 0] = 0.0
+                Himg[1, 1] = -1.0
+                Himg[1, 2] = offH
+            else:
+                raise ValueError("rotate must be '90_COUNTERCLOCKWISE'|'90_CLOCKWISE'|'180'")
+            return Himg
 
-        elif rotate == '180':
-            # (u', v') = (W-1 - u, H-1 - v), size unchanged
-            K_new[:, 0, 0] = fx
-            K_new[:, 1, 1] = fy
-            K_new[:, 0, 2] = (Wpix - 1.0) - cx
-            K_new[:, 1, 2] = (Hpix - 1.0) - cy
-            image_size_new = self.image_size.clone()
-
-        else:
-            raise ValueError("rotate must be one of '90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180' or None")
-
-        # preserve (potential) skew term only for 180°, where it’s invariant under the flip.
-        # for 90° rotations we assume zero skew (OpenCV default). if you truly have nonzero skew,
-        # switch to an RQ-based update.
-        if rotate == '180':
-            K_new[:, 0, 1] = K[:, 0, 1]
-
+        # Add this transform during image loading to rotate the image / mask / depth
         rotate_transform = partial(CalibrationData.rotate_transform, rotate=rotate)
-        transforms = (self._preprocessing_transforms or []) + [rotate_transform]
+        transforms = [rotate_transform] + (self._preprocessing_transforms or [])
 
+        # Choose camera-frame Z rotation (keeps fx,fy positive for typical K)
+        angle = {'90_CLOCKWISE': +90.0, '90_COUNTERCLOCKWISE': -90.0, '180': 180.0}[rotate]
+        Rz = _rz_torch(angle)  # (3,3)
+        RzT = Rz.transpose(0, 1)
+        Mz = torch.eye(4)
+        Mz[:3, :3] = Rz
+
+        K_new = torch.empty_like(K)
+        Tw2c_new = torch.empty_like(Tw2c)
+        image_size_new = image_size.clone()
+
+        for i in range(N):
+            Hi = image_size[i, 0].to(dtype=dtype)
+            Wi = image_size[i, 1].to(dtype=dtype)
+
+            # Pixel-space homography for this cam's original size
+            Himg = _Himg_torch(Wi, Hi, rotate)  # (3,3)
+
+            # K' = Himg @ K @ Rz^T
+            K_new[i] = Himg @ K[i] @ RzT
+
+            # T'w2c = blkdiag(Rz,1) @ Tw2c
+            Tw2c_new[i] = Mz @ Tw2c[i]
+
+            # Update image size (H,W)
+            if rotate in ('90_CLOCKWISE', '90_COUNTERCLOCKWISE'):
+                image_size_new[i, 0] = image_size[i, 1]  # H' = W
+                image_size_new[i, 1] = image_size[i, 0]  # W' = H
+            else:  # '180'
+                # unchanged
+                pass
+
+        Tc2w_new = torch.linalg.inv(Tw2c_new)
         return CalibrationData(
             intrinsics=K_new,
-            extrinsics_c2w=self.extrinsics_c2w.clone(),  # c2w left untouched
+            extrinsics_c2w=Tc2w_new,
             dists=self.dists.clone(),
-            rotmats=self.rotmats.clone(),
-            tvecs=self.tvecs.clone(),
+            rotmats=Tc2w_new[:, :3, :3],
+            tvecs=Tc2w_new[:, :3, 3],
             cam_names=self.cam_names.copy(),
             image_size=image_size_new,
             _preprocessing_transforms=transforms
@@ -333,6 +380,93 @@ class CalibrationData:
         ax.view_init(elev=20, azim=45)
         plt.tight_layout()
         plt.show()
+
+    def export_to_unity(self, json_path: Path) -> None:
+        with open(json_path, 'w') as f:
+            unity_c2w = self.extrinsics_c2w @ torch.diag(torch.tensor([1.0, -1.0, 1.0, 1.0]))[None]
+            transs = unity_c2w[:, :3, 3]
+            rots = kornia.geometry.rotation_matrix_to_quaternion(unity_c2w[:, :3, :3])[..., (1, 2, 3, 0)].numpy()
+            json_data = []
+            for cam_name, trans, rot, intri, (h, w) in zip(self.cam_names, transs, rots, self.intrinsics, self.image_size):
+                cam_name = cam_name.split('/')[-1]
+                json_data.append({
+                    "id": cam_name,
+                    "index": str(cam_name).split(' ')[0].lower().replace('cam', ''),
+                    'position': trans.flatten().tolist(),
+                    'rotation': rot.flatten().tolist(),
+                    "intrinsics": {
+                        "fx": intri[0][0].item(),
+                        "fy": intri[1][1].item(),
+                        "cx": intri[0][2].item(),
+                        "cy": intri[1][2].item(),
+                        "w": w.int().item(),
+                        "h": h.int().item()
+                    }
+                })
+            json.dump(dict(cameras=json_data), f, indent=2)
+
+    def export_to_holomit(self, json_path: Path) -> None:
+        with open(json_path, 'w') as f:
+            unity_c2w = self.extrinsics_c2w @ torch.diag(torch.tensor([1.0, -1.0, 1.0, 1.0]))[None]
+            calibration_data = {}
+            processing_data = {}
+            for cam_name, c2w, intri, dist, (h, w) in zip(self.cam_names, unity_c2w.squeeze().detach().cpu(), self.intrinsics.detach().cpu(), self.dists.detach().cpu(), self.image_size.detach().cpu()):
+                dist = dist.flatten().tolist()
+                cam_name = cam_name.split('/')[-1]
+                cam_idx = str(cam_name).split(' ')[0].lower().replace('cam', '')
+                cam_key = f'SN{int(cam_idx):010d}'
+                calibration_data[cam_key] = {
+                    "trafo": c2w.tolist(),
+                    "dScale": 0.001,
+                    "color_shape": {
+                        "height": int(h),
+                        "width": int(w),
+                        "numChannels": 1,
+                        "channelSize": 2
+                    },
+                    "color_intrinsics": {
+                        "fx": intri[0][0].item(),
+                        "fy": intri[1][1].item(),
+                        "cx": intri[0][2].item(),
+                        "cy": intri[1][2].item(),
+                    },
+                    "color_distortion": {
+                        "k1": dist[0] if len(dist) > 1 else 0.0,
+                        "k2": dist[1] if len(dist) > 1 else 0.0,
+                        "k3": dist[4] if len(dist) > 1 else 0.0,
+                        "k4": 0.0,
+                        "k5": 0.0,
+                        "k6": 0.0,
+                        "p1": dist[2] if len(dist) > 1 else 0.0,
+                        "p2": dist[3] if len(dist) > 1 else 0.0,
+                        "codx": 0.0,
+                        "cody": 0.0,
+                        "metric_radius": 0.0
+                    }
+                }
+                processing_data[cam_key] = {
+                    "threshold_near": 0.5,
+                    "threshold_far": 5.0,
+                    "mask_color": False
+                }
+            processing_data["general"] = {
+                "bounding_box": {
+                    "xMin": 0.0,
+                    "xMax": 0.0,
+                    "yMin": 0.0,
+                    "yMax": 0.0,
+                    "zMin": 0.0,
+                    "zMax": 0.0
+                }
+            }
+            json.dump(dict(
+                version=2,
+                fps=30,
+                ts_unit="ms",
+                calibration=calibration_data,
+                processing=processing_data
+            ), f, indent=2)
+
 
     @staticmethod
     def remap_transform(image: np.ndarray, mask: np.ndarray, depth: Optional[np.ndarray] = None, remaps_x: np.ndarray = None, remaps_y: np.ndarray = None, cam_idx_s0: int = -1) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
@@ -386,10 +520,11 @@ class CalibrationData:
             rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None,
             **ignored_kwargs) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         if rotate:
-            image = cv2.rotate(image, getattr(cv2, f'ROTATE_{rotate.upper()}'))
+            rot_flag = getattr(cv2, f'ROTATE_{rotate.upper()}')
+            image = cv2.rotate(image, rot_flag)
             mask_dtype = mask.dtype
-            mask = cv2.rotate(mask.astype(np.uint8), getattr(cv2, f'ROTATE_{rotate.upper()}')).astype(mask_dtype)
-            depth = cv2.rotate(depth, getattr(cv2, f'ROTATE_{rotate.upper()}'))
+            mask = cv2.rotate(mask.astype(np.uint8), rot_flag).astype(mask_dtype)
+            depth = cv2.rotate(depth, rot_flag)
         return image, mask, depth
 
     @classmethod
@@ -426,8 +561,8 @@ class CalibrationData:
         session_path = Path(session_path)
         if not session_path.exists():
             for d in PathUtils.capturestudio_cache_path().glob('Captures_*'):
-                if d.is_dir() and (d/session_path.name).exists():
-                    session_path = d/session_path.name
+                if d.is_dir() and (d / session_path.name).exists():
+                    session_path = d / session_path.name
                     break
         assert session_path.exists(), f"Session path does not exist: {session_path}"
 
@@ -440,27 +575,28 @@ class CalibrationData:
         module = importlib.import_module('utils.calib')
         method = 'Caliscope' if (calibration_dir / 'caliscope').exists() else 'MultiCamCalib'
         reader_cls = getattr(module, f'{method}Reader')
-        caliscope_data = reader_cls(session_path).read()
+        calib_reader = reader_cls(session_path)
+        calib_data = calib_reader.read()
         if idx == 'all':
-            idx = list(range(len(caliscope_data)))
+            idx = list(range(len(calib_data)))
         extri_4x4 = torch.eye(4, dtype=torch.float32)[None].repeat(len(idx), 1, 1)
         extri_4x4[:, :3, :] = torch.stack([
-            torch.tensor(v['extri'], dtype=torch.float32)
-            for vi, v in enumerate(caliscope_data.values())
+            torch.tensor(v['extri'] if 'extri' in v and v['extri'] is not None else np.eye(4)[:3], dtype=torch.float32)
+            for vi, v in enumerate(calib_data.values())
             if vi in idx
         ], dim=0)
         extri_4x4[:, :3, :3] = ensure_rotmat_is_valid(extri_4x4[:, :3, :3])
         extri_4x4 = extri_4x4.inverse()  # w2c (viewmatrix) --> c2w (calibration matrix)
         extri_4x4[:, :3, :3] = ensure_rotmat_is_valid(extri_4x4[:, :3, :3])
-        return CalibrationData(
+        cd = CalibrationData(
             intrinsics=torch.stack([
                 torch.tensor(v['intri']['K'], dtype=torch.float32)
-                for vi, v in enumerate(caliscope_data.values())
+                for vi, v in enumerate(calib_data.values())
                 if vi in idx
             ], dim=0).reshape(-1, 3, 3),
             dists=torch.stack([
                 torch.tensor(v['intri']['dist'], dtype=torch.float32)
-                for vi, v in enumerate(caliscope_data.values())
+                for vi, v in enumerate(calib_data.values())
                 if vi in idx
             ], dim=0),
             rotmats=extri_4x4[:, :3, :3],
@@ -468,15 +604,23 @@ class CalibrationData:
             extrinsics_c2w=extri_4x4,
             cam_names=[
                 v['cam_name']
-                for vi, v in enumerate(caliscope_data.values())
+                for vi, v in enumerate(calib_data.values())
                 if vi in idx
             ],
             image_size=torch.stack([
                 torch.tensor(v['image_size'], dtype=torch.int)
-                for vi, v in enumerate(caliscope_data.values())
+                for vi, v in enumerate(calib_data.values())
                 if vi in idx
-            ], dim=0)
+            ], dim=0),
+            _is_prerotated=getattr(calib_reader, 'is_prerotated', False),
+            _prerotation=getattr(calib_reader, 'prerotation', None),
         )
+        if cd._is_prerotated and cd._prerotation is not None:
+            log(f'[CalibrationData::from_session] Found prerotated calibration (rotate={cd._prerotation})', 'debug')
+            cd._preprocessing_transforms = [
+                partial(CalibrationData.rotate_transform, rotate=cd._prerotation)
+            ]
+        return cd
 
     @classmethod
     def from_session_folder(cls, session_folder: Path, idx: Literal['all'] | List[int] = 'all') -> Union['CalibrationData', None]:
@@ -559,12 +703,16 @@ class CaliscopeReader:
             for pair in override_cam_mapping.split(','):
                 pair = pair.strip().split('-->')
                 self.override_cam_mapping[pair[0].strip()] = pair[1].strip()
+        self.is_prerotated = False
+        self.prerotation = None
 
     def read(self, only_indices: Optional[List[int]] = None):
         log(f'[{self.__class__.__name__}::read] Reading Caliscope data (path={self.calib_root})', 'debug')
         with open(self.calib_root / 'config.toml', 'r') as f:
             caliscope_data = toml.load(f)
         assert caliscope_data is not None and caliscope_data['camera_count'] <= len(self.camera_names)
+        self.is_prerotated = caliscope_data.get('prerotated', False)
+        self.prerotation = caliscope_data.get('prerotation', None)
         cam_dict = {}
         for name, data in caliscope_data.items():
             # Thanos: skip non-camera entries
@@ -572,7 +720,7 @@ class CaliscopeReader:
                 continue
 
             try:
-                cam_index_s0 = int(self.override_cam_mapping.get(name, name))
+                cam_index_s0 = int(self.override_cam_mapping.get(name, name).replace("cam_", "")) - 1
             except ValueError:
                 continue
             if cam_index_s0 not in self.camera_indices_s0 or (only_indices is not None and (cam_index_s0 + 1) not in only_indices):
@@ -682,8 +830,6 @@ class MultiCamCalibReader(CaliscopeReader):
 
 
 if __name__ == '__main__':
-    from pathlib import Path
-
     # SUBJECT = 'Thobias'
     # PERF = True
     # CALIB = False
@@ -693,6 +839,10 @@ if __name__ == '__main__':
     # colmap_data_ = ColmapReader(capture_path_).read()
     # print(caliscope_data_)
 
-    capture_path_ = Path('/home/charisoudis/PyCharmMiscProject/irc-hslu/capturestudio/out/Captures_Apr_May_2025/Aggregated/Thanos_2_Calib_1')
+    # session_ = 'Captures_March_2025/Aljosa_1_Calib_1'
+    # session_ = 'Captures_Brasov_Dec_2025/Brasov_2_Calib_1'
+    session_ = 'Captures_Cagliari_Nov_2025/Cagliari_1_Calib_6'
+    capture_path_ = Path(f'/root/CAPTURESTUDIO_CACHE/{session_}')
     calib_data_ = CalibrationData.from_session(capture_path_)
-    print(calib_data_)
+    calib_data_.export_to_unity(f'/root/capturestudio2/src/{session_.split("/")[1].lower()}_unity.json')
+    calib_data_.export_to_holomit(f'/root/capturestudio2/src/{session_.split("/")[1].lower()}_holomit.json')

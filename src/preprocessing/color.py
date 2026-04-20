@@ -1,27 +1,36 @@
+import itertools
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Optional, List, Dict, Union
+from typing import Literal, Optional, List, Dict, Union, Tuple
 
 import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image
+from torchvision.ops import nms
 from tqdm import tqdm
 
-from utils.misc import log, PathUtils, get_segmentor, get_of_estimator, get_detector
+from utils.flow import FlowUtils
+from utils.misc import log, PathUtils, get_segmentor, get_detector, get_of_estimator
 
 
-def detect(image_path: Path, target_classes: Sequence[str] = ('person',), conf_threshold: float = 0.5, rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None, unrotate_output: bool = False) -> List[Dict[str, Union[list, float, str, int]]]:
+def detect(image_path: Path,
+           target_classes: Sequence[str] = ('person', 'guitar', 'guitar band', 'drums'),
+           conf_threshold: float = 0.5,
+           rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None,
+           unrotate_output: bool = False,
+           which_detector: Literal['yolo', 'sam3'] = 'sam3') -> List[Dict[str, Union[list, float, str, int]]]:
     """
     Detect objects in an image.
 
     Parameters
     ----------
     image_path: Path
-        Path to the input image
+        The path to the input image.
     target_classes: Sequence[str]
-        List of target class names to detect (e.g. 'person', 'car', etc
+        List of target class names to detect (e.g. 'person', 'car', etc.).
     conf_threshold: float
         Confidence threshold for detections (0-1)
     rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180
@@ -31,6 +40,8 @@ def detect(image_path: Path, target_classes: Sequence[str] = ('person',), conf_t
             - '180': Rotate 180 degrees
     unrotate_output: bool
         If True and rotate is specified, the output bounding boxes will be transformed back to the original orientation.
+    which_detector: Literal['yolo', 'sam3']
+        The model to use for object detection. One of `yolo` (YOLO v11), `sam3` (Segment Anything Model v3). Default is `sam3`.
 
     Returns
     -------
@@ -42,9 +53,13 @@ def detect(image_path: Path, target_classes: Sequence[str] = ('person',), conf_t
         - 'class_id': Class ID
     """
     with torch.no_grad():
-        detector, detector_class_names = get_detector()
+        from ultralytics import YOLO
+        from sam3.model.sam3_image import Sam3Image
+        detector: Union[YOLO, Sam3Image]
+        detector, detector_class_names = get_detector(which_detector)
         device = detector.device
-        # Convert class names to IDs
+
+        # Convert class names to IDs (works for YOLO and for SAM3 using the detector_class_names catalog)
         class_ids = []
         for cls in target_classes:
             if cls.lower() in detector_class_names.values():
@@ -53,64 +68,174 @@ def detect(image_path: Path, target_classes: Sequence[str] = ('person',), conf_t
                 print(f"Warning: Class '{cls}' not found in model classes")
         if not class_ids:
             raise ValueError("None of the target classes are valid for this model")
+
         # Load image and store original shape
         img = cv2.imread(str(image_path))
+        if img is None:
+            raise FileNotFoundError(f"Could not read image: {image_path}")
         if rotate:
             img = cv2.rotate(img, getattr(cv2, f'ROTATE_{rotate}'))
         new_h, new_w = img.shape[:2]
-        # Run inference
-        results = detector.predict(
-            img,
-            classes=class_ids,
-            conf=conf_threshold,
-            device=device
-        )
-        # Parse results
-        detections = []
-        for result in results:
-            for box in result.boxes:
-                bbox_xyxy = box.xyxy.cpu().numpy()[0]
-                bbox_xyxy_rotated = bbox_xyxy.copy()
-                if rotate and unrotate_output:
-                    x1, y1, x2, y2 = bbox_xyxy
-                    corners = np.array([
-                        [x1, y1],  # A (tl)
-                        [x2, y1],  # B (tr)
-                        [x2, y2],  # C (br)
-                        [x1, y2],  # D (bl)
-                    ])
-                    if rotate == '90_CLOCKWISE':
-                        transformed = np.array([[y, new_w - x] for (x, y) in corners])
-                    elif rotate == '90_COUNTERCLOCKWISE':
-                        transformed = np.array([[new_h - y, x] for (x, y) in corners])
-                    elif rotate == '180':
-                        transformed = np.array([[new_w - x, new_h - y] for (x, y) in corners])
-                    # Compute new bbox from transformed corners
-                    x_coords, y_coords = transformed[:, 0], transformed[:, 1]
-                    bbox_xyxy = [float(x_coords.min()), float(y_coords.min()),
-                                 float(x_coords.max()), float(y_coords.max())]
-                detections.append({
-                                      'bbox': [float(c) for c in bbox_xyxy],
-                                      'confidence': float(box.conf.item()),
-                                      'class_name': detector_class_names[int(box.cls.item())],
-                                      'class_id': int(box.cls.item())
-                                  } | {f'bbox_rotated_{rotate}': [float(c) for c in bbox_xyxy_rotated]} if rotate else {})
+
+        if which_detector == 'yolo':
+            results = detector.predict(
+                img,
+                classes=class_ids,
+                conf=conf_threshold,
+                device=device
+            )
+            # Parse results
+            detections = []
+            for result in results:
+                for box in result.boxes:
+                    bbox_xyxy = box.xyxy.cpu().numpy()[0]
+                    bbox_xyxy_rotated = bbox_xyxy.copy()
+                    if rotate and unrotate_output:
+                        x1, y1, x2, y2 = bbox_xyxy
+                        corners = np.array([
+                            [x1, y1],  # A (tl)
+                            [x2, y1],  # B (tr)
+                            [x2, y2],  # C (br)
+                            [x1, y2],  # D (bl)
+                        ])
+                        if rotate == '90_CLOCKWISE':
+                            transformed = np.array([[y, new_w - x] for (x, y) in corners])
+                        elif rotate == '90_COUNTERCLOCKWISE':
+                            transformed = np.array([[new_h - y, x] for (x, y) in corners])
+                        elif rotate == '180':
+                            transformed = np.array([[new_w - x, new_h - y] for (x, y) in corners])
+                        # Compute new bbox from transformed corners
+                        x_coords, y_coords = transformed[:, 0], transformed[:, 1]
+                        bbox_xyxy = [float(x_coords.min()), float(y_coords.min()),
+                                     float(x_coords.max()), float(y_coords.max())]
+                    detections.append({
+                                          'bbox': [float(c) for c in bbox_xyxy],
+                                          'confidence': float(box.conf.item()),
+                                          'class_name': detector_class_names[int(box.cls.item())],
+                                          'class_id': int(box.cls.item())
+                                      } | {f'bbox_rotated_{rotate}': [float(c) for c in bbox_xyxy_rotated]} if rotate else {})
+        elif which_detector == 'sam3':
+            # --- SAM3 text-prompted detection on a single image ---
+            from sam3.model.sam3_image_processor import Sam3Processor
+            processor: Sam3Processor = getattr(detector, "_processor", None)
+            if processor is None:
+                raise AttributeError("SAM3 detector is missing `_processor`. Ensure get_detector('sam3') attaches Sam3Processor to the model.")
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            pil = Image.fromarray(img_rgb)
+
+            # Build id->name and name->id maps for requested classes
+            requested = [detector_class_names[i] for i in class_ids]
+            catalog_map = {name: i for i, name in detector_class_names.items()}
+            detections = []
+            with torch.inference_mode():
+                state = processor.set_image(pil)
+
+                for cls in requested:
+                    out = processor.set_text_prompt(state=state, prompt=cls)
+                    boxes = out.get("boxes", [])
+                    scores = out.get("scores", [])
+
+                    if isinstance(boxes, torch.Tensor):
+                        boxes = boxes.detach().cpu().numpy()
+                    else:
+                        boxes = np.asarray(boxes) if len(boxes) else np.zeros((0, 4), dtype=np.float32)
+                    boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 4) if boxes is not None else np.zeros((0, 4), dtype=np.float32)
+
+                    if isinstance(scores, torch.Tensor):
+                        scores = scores.detach().cpu().numpy().astype(np.float32)
+                    else:
+                        scores = np.asarray(scores, dtype=np.float32) if len(scores) else np.zeros((0,), dtype=np.float32)
+                    scores = np.asarray(scores, dtype=np.float32).reshape(-1, ) if scores is not None else np.zeros((0,), dtype=np.float32)
+
+                    if boxes.shape[0] == 0 or scores.shape[0] == 0:
+                        continue
+
+                    # Filter by confidence
+                    keep_idx = np.where(scores >= float(conf_threshold))[0]
+                    if keep_idx.size == 0:
+                        continue
+                    boxes = boxes[keep_idx]
+                    scores = scores[keep_idx]
+
+                    # Clamp and validate
+                    boxes[:, 0] = np.clip(boxes[:, 0], 0.0, float(new_w - 1))
+                    boxes[:, 2] = np.clip(boxes[:, 2], 0.0, float(new_w - 1))
+                    boxes[:, 1] = np.clip(boxes[:, 1], 0.0, float(new_h - 1))
+                    boxes[:, 3] = np.clip(boxes[:, 3], 0.0, float(new_h - 1))
+                    valid = (boxes[:, 2] > boxes[:, 0]) & (boxes[:, 3] > boxes[:, 1])
+                    boxes = boxes[valid]
+                    scores = scores[valid]
+                    if boxes.shape[0] == 0:
+                        continue
+
+                    # Per-class NMS
+                    keep = nms(torch.as_tensor(boxes), torch.as_tensor(scores), iou_threshold=0.5).detach().cpu().numpy().tolist()
+                    boxes = boxes[keep]
+                    scores = scores[keep]
+                    for bbox_xyxy, score in zip(boxes, scores):
+                        bbox_xyxy = bbox_xyxy.astype(np.float32)
+                        bbox_xyxy_rotated = bbox_xyxy.copy()
+
+                        bbox_out = bbox_xyxy.tolist()
+                        if rotate and unrotate_output:
+                            x1, y1, x2, y2 = bbox_xyxy.tolist()
+                            corners = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+                            if rotate == '90_CLOCKWISE':
+                                transformed = np.array([[y, new_w - x] for (x, y) in corners], dtype=np.float32)
+                            elif rotate == '90_COUNTERCLOCKWISE':
+                                transformed = np.array([[new_h - y, x] for (x, y) in corners], dtype=np.float32)
+                            elif rotate == '180':
+                                transformed = np.array([[new_w - x, new_h - y] for (x, y) in corners], dtype=np.float32)
+                            else:
+                                transformed = corners
+                            x_coords, y_coords = transformed[:, 0], transformed[:, 1]
+                            bbox_out = [float(x_coords.min()), float(y_coords.min()), float(x_coords.max()), float(y_coords.max())]
+
+                        detections.append({
+                                              "bbox": [float(c) for c in bbox_out],
+                                              "confidence": float(score),
+                                              "class_name": cls,
+                                              "class_id": int(catalog_map.get(cls, 0)),
+                                          } | ({f"bbox_rotated_{rotate}": [float(c) for c in bbox_xyxy_rotated.tolist()]} if rotate else {}))
+
+                # cleanup prompts for this image
+                processor.reset_all_prompts(state)
+        else:
+            raise ValueError(f"Unsupported detector type: {which_detector}")
+
     return detections
 
 
-def segment(video_path: Path, first_frame_detections: List[Dict[str, Union[list, float, str, int]]], out_paths: List[Path], rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None, unrotate_output: bool = True) -> bool:
+def segment(video_path: Path,
+            first_frame_detections: List[Dict[str, Union[list, float, str, int]]],
+            out_paths: List[Path],
+            rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None,
+            unrotate_output: bool = True,
+            which_segmentor: Literal['sam2', 'sam3'] = 'sam2',
+            first_frame_global_idx: int = 0) -> bool:
     """
     Segment objects in a video based on detections.
+    ATTN: Assumes that detection data (incl. bboxes and pos/neg points) have been generated beforehand.
 
-    Args:
-        video_path: Path to input video
-        first_frame_detections: List of detection dictionaries (see detect()). If rotate, then the key 'bbox_rotated_{rotate}' must be present and will be used instead of 'bbox'.
-        out_paths: List of output paths for segmentation masks
-        rotate: Optional rotation to apply to the video before segmentation
-            - '90_CLOCKWISE': Rotate 90 degrees clockwise
-            - '90_COUNTERCLOCKWISE': Rotate 90 degrees counterclockwise
-            - '180': Rotate 180 degrees
-        unrotate_output: If True, the output masks will be transformed back to the original orientation
+    Parameters
+    ----------
+    video_path: Path
+        Path to input video.
+    first_frame_detections: List[Dict[str, Union[list, float, str, int]]]
+        List of detection dictionaries (see detect()). If rotate, then the key 'bbox_rotated_{rotate}' must be present and will be used instead of 'bbox'.
+    out_paths: List[Path]
+        List of output paths for segmentation masks.
+    rotate: Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']], optional
+        Optional rotation to apply to the video before segmentation:
+        - '90_CLOCKWISE': Rotate 90 degrees clockwise
+        - '90_COUNTERCLOCKWISE': Rotate 90 degrees counterclockwise
+        - '180': Rotate 180 degrees
+    unrotate_output: bool
+        If True, the output masks will be transformed back to the original orientation.
+    which_segmentor: Literal['sam2', 'sam3']
+        Which model to use for segmentation. One of `sam2` (Segment Anything Model v2), `sam3` (Segment Anything Model v3). Default is `sam3`.
+    first_frame_global_idx: int, optional
+        If != 0, all frame_idx will be recalculated before fed to SAM.
     """
     # If rotate check if the video is already rotated (stem should end with _rotated_{rotate.lower()})
     if rotate and not video_path.stem.endswith(f'_rotated_{rotate.lower()}'):
@@ -130,29 +255,98 @@ def segment(video_path: Path, first_frame_detections: List[Dict[str, Union[list,
         rotated_clip.write_videofile(str(rotated_video_path), codec='libx264', audio=False, verbose=False, logger=None)
         video_path = rotated_video_path
 
-    segmentor = get_segmentor()
+    from sam2.sam2_video_predictor import SAM2VideoPredictor
+    from sam3.model.sam3_video_predictor import Sam3VideoPredictor
+    segmentor: Union[SAM2VideoPredictor, Sam3VideoPredictor] = get_segmentor(which=which_segmentor)
+
     # get embeddings
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16), torch.no_grad():
-        state = segmentor.init_state(str(video_path), offload_video_to_cpu=True, offload_state_to_cpu=True, async_loading_frames=True)
+        if which_segmentor == 'sam2':
+            state = segmentor.init_state(str(video_path), offload_video_to_cpu=True, offload_state_to_cpu=True, async_loading_frames=True)
+        else:
+            session_id = segmentor.start_session(str(video_path))['session_id']
+            # noinspection PyProtectedMember
+            state = segmentor._ALL_INFERENCE_STATES[session_id]['state']
+        H, W = state.get("orig_height", None), state.get("orig_width", None)
+        if H is None or W is None:
+            H, W = state['video_height'], state['video_width']
         # add all bboxes
         single_subject = False
         found_bbox = False
-        bbox_thresh = 100
+        bbox_thresh = 7
         frame_idx = 0
         tracked_obj_ids = set()
         for obj_id, frame_bbox_data in enumerate(first_frame_detections):
-            frame_bbox_i = frame_bbox_data['bbox' if not rotate else f'bbox_rotated_{rotate}']
-            conf_i = frame_bbox_data['confidence']
-            class_name_i = frame_bbox_data['class_name']
-            if conf_i < 0.4:
-                log(f'Skipping bbox with low confidence: {frame_bbox_i} | {conf_i}', 'warning')
-                continue
-            frame_bbox_i = np.array(frame_bbox_i)[:4]
-            if ((frame_bbox_i[2] - frame_bbox_i[0]) < bbox_thresh) or ((frame_bbox_i[3] - frame_bbox_i[1]) < bbox_thresh):
-                log(f'Skipping bbox with small size: {frame_bbox_i} | {(frame_bbox_i[2] - frame_bbox_i[0], frame_bbox_i[3] - frame_bbox_i[1])}', 'warning')
-                continue
-            log(f'\t[frame={frame_idx:04d}][obj={obj_id} ({class_name_i})] adding bbox: {frame_bbox_i.astype(int).tolist()}', 'debug')
-            _, obj_ids, obj_masks = segmentor.add_new_points_or_box(state, frame_idx=frame_idx, obj_id=obj_id + 1, box=frame_bbox_i)
+            bbox_key = 'bbox' if not rotate else f'bbox_rotated_{rotate}'
+            point_key = 'points' if not rotate else f'points_rotated_{rotate}'
+            if bbox_key in frame_bbox_data:
+                frame_bbox_i = frame_bbox_data[bbox_key]
+                conf_i = frame_bbox_data['confidence']
+                class_name_i = frame_bbox_data['class_name']
+                if conf_i < 0.4:
+                    log(f'Skipping bbox with low confidence: {frame_bbox_i} | {conf_i}', 'warning')
+                    continue
+                frame_bbox_i = np.array(frame_bbox_i)[:4]
+                if ((frame_bbox_i[2] - frame_bbox_i[0]) < bbox_thresh) or ((frame_bbox_i[3] - frame_bbox_i[1]) < bbox_thresh):
+                    log(f'Skipping bbox with small size: {frame_bbox_i} | {(frame_bbox_i[2] - frame_bbox_i[0], frame_bbox_i[3] - frame_bbox_i[1])}', 'warning')
+                    continue
+                if 'frame_idx' in frame_bbox_data:
+                    frame_idx_this = int(frame_bbox_data['frame_idx'])
+                else:
+                    frame_idx_this = frame_idx
+
+                if which_segmentor == 'sam2':
+                    _, obj_ids, obj_masks = segmentor.add_new_points_or_box(state, frame_idx=frame_idx_this + first_frame_global_idx, obj_id=obj_id + 1, box=frame_bbox_i)
+                elif which_segmentor == 'sam3':
+                    # add bbox prompts: create labels that are positive
+                    x1, y1, x2, y2 = map(float, frame_bbox_i.tolist())
+                    # Normalized cx,cy,w,h in [0,1] for geometric prompt
+                    cx = ((x1 + x2) * 0.5) / float(W)
+                    cy = ((y1 + y2) * 0.5) / float(H)
+                    ww = (x2 - x1) / float(W)
+                    hh = (y2 - y1) / float(H)
+                    box_cxcywh = [float(cx), float(cy), float(ww), float(hh)]
+                    _, out = segmentor.model.add_prompt(state, frame_idx=frame_idx_this + first_frame_global_idx, obj_id=obj_id + 1, boxes_xywh=[box_cxcywh], box_labels=[True])
+                    obj_ids = out['out_obj_ids']
+                    print(obj_ids)
+                    obj_masks = out['out_binary_masks']
+                    cv2.imwrite(f'mask_{"_".join(list(map(str, obj_ids.tolist())))}.jpg', (out['out_binary_masks'].squeeze()*255).astype(np.byte))
+                else:
+                    raise NotImplementedError
+                log(f'\t[frame={(frame_idx_this + first_frame_global_idx):04d}][obj={obj_id} ({class_name_i})] added bbox: {frame_bbox_i.astype(int).tolist()}', 'debug')
+
+            elif point_key in frame_bbox_data:
+                frame_points: List[Tuple[int, int]] = frame_bbox_data[point_key]
+                frame_point_labels: List[int] = frame_bbox_data['point_labels']
+                if 'frame_idx' in frame_bbox_data:
+                    frame_idx_this = int(frame_bbox_data['frame_idx'])
+                else:
+                    frame_idx_this = frame_idx
+
+                if which_segmentor == 'sam2':
+                    segmentor.add_new_points_or_box(state, frame_idx=frame_idx_this + first_frame_global_idx, points=frame_points, obj_id=obj_id + 1, labels=frame_point_labels)
+                elif which_segmentor == 'sam3':
+                    # compute points and point labels: create a small bbox around each point and input that instead
+                    norm_point_boxes: List[Tuple[float, float, float, float]] = []
+                    norm_point_labels: List[bool] = []
+                    for (px, py), lab in zip(frame_points, frame_point_labels):
+                        # Build a 3x3 box centered at (px, py)
+                        x1p = max(0.0, px - 1.0)
+                        y1p = max(0.0, py - 1.0)
+                        x2p = min(W - 1.0, px + 1.0)
+                        y2p = min(H - 1.0, py + 1.0)
+                        cxp = ((x1p + x2p) * 0.5) / float(W)
+                        cyp = ((y1p + y2p) * 0.5) / float(H)
+                        wwp = max(1.0, (x2p - x1p)) / float(W)
+                        hhp = max(1.0, (y2p - y1p)) / float(H)
+                        norm_point_boxes.append((float(cxp), float(cyp), float(wwp), float(hhp)))
+                        norm_point_labels.append(bool(1 - lab))
+                    segmentor.model.add_prompt(state, frame_idx=frame_idx_this + first_frame_global_idx, points=frame_points, obj_id=obj_id + 1, boxes_xywh=norm_point_boxes, box_labels=norm_point_labels)
+                else:
+                    raise NotImplementedError
+                log(f'\t[frame={(frame_idx_this + first_frame_global_idx):04d}] added points: {frame_bbox_data[point_key]} with labels {frame_bbox_data["point_labels"]}', 'debug')
+            else:
+                raise KeyError('neither bbox or points found')
             if len(obj_ids) > 1:
                 # selected_masks, selected_indices = GenerateSegmentationMaskTask.visualize_and_select_multiple_masks(np.zeros(*obj_masks[0].shape, 3), obj_masks)
                 # obj_ids = [obj_ids[i] for i in selected_indices]
@@ -167,29 +361,69 @@ def segment(video_path: Path, first_frame_detections: List[Dict[str, Union[list,
             return False
 
         # Propagate masks and merge per frame
-        for frame_idx, object_ids, masks in segmentor.propagate_in_video(state):
-            merged_mask = None
+        if which_segmentor == 'sam2':
+            forward_prop = segmentor.propagate_in_video(state, reverse=False)
+            if first_frame_global_idx > 0 and False:
+                backward_prop = segmentor.propagate_in_video(state, reverse=True)
+                propagator = itertools.chain(forward_prop, backward_prop)
+            else:
+                propagator = forward_prop
+            # propagator = segmentor.propagate_in_video(state, reverse=True)
+        elif which_segmentor == 'sam3':
+            propagator = segmentor.handle_stream_request(
+                request=dict(
+                    type="propagate_in_video",
+                    session_id=session_id,
+                    propagation_direction='both',
+                    start_frame_idx=0,
+                    # max_frame_num_to_track=30
+                )
+            )
+            # propagator = segmentor.propagate_in_video(session_id, propagation_direction='forward', start_frame_idx=0, max_frame_num_to_track=30)
+        else:
+            raise NotImplementedError
+
+        masks_per_frame_index = {}
+        for _ in propagator:
+            if which_segmentor == 'sam2':
+                frame_idx, object_ids, masks = _
+            elif which_segmentor == 'sam3':
+                frame_idx = _['frame_index']
+                outputs = _['outputs']
+                if outputs is None:
+                    log(f'[segment] Got no outputs for frame {frame_idx}', 'warning')
+                    continue
+                object_ids = outputs['out_obj_ids']
+                masks = outputs['out_binary_masks']
+            else:
+                raise NotImplementedError
+            merged_mask = masks_per_frame_index.get(frame_idx, None)
             for obj_id, mask in zip(object_ids, masks):
                 if obj_id not in tracked_obj_ids:
                     continue
-                binary_mask = (mask.detach().cpu().squeeze().numpy() > 0.5)
+                if isinstance(mask, torch.Tensor):
+                    mask = mask.detach().cpu().squeeze().numpy()
+                binary_mask = mask > 0.5
                 if merged_mask is None:
                     merged_mask = binary_mask
                 else:
                     merged_mask |= binary_mask  # Logical OR to merge
+            if merged_mask is None:
+                continue
+            masks_per_frame_index[frame_idx] = merged_mask
 
-            if merged_mask is not None:
-                merged_mask = (merged_mask * 255).astype(np.uint8)
+        for frame_idx, merged_mask in tqdm(masks_per_frame_index.items(), desc='Storing masks to disk'):
+            merged_mask = (merged_mask * 255).astype(np.uint8)
 
-                if rotate and unrotate_output:
-                    if rotate == '90_CLOCKWISE':
-                        merged_mask = cv2.rotate(merged_mask, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                    elif rotate == '90_COUNTERCLOCKWISE':
-                        merged_mask = cv2.rotate(merged_mask, cv2.ROTATE_90_CLOCKWISE)
-                    elif rotate == '180':
-                        merged_mask = cv2.rotate(merged_mask, cv2.ROTATE_180)
+            if rotate and unrotate_output:
+                if rotate == '90_CLOCKWISE':
+                    merged_mask = cv2.rotate(merged_mask, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                elif rotate == '90_COUNTERCLOCKWISE':
+                    merged_mask = cv2.rotate(merged_mask, cv2.ROTATE_90_CLOCKWISE)
+                elif rotate == '180':
+                    merged_mask = cv2.rotate(merged_mask, cv2.ROTATE_180)
 
-                PathUtils.write_file(out_paths[frame_idx], merged_mask)
+            PathUtils.write_file(out_paths[int(frame_idx)], merged_mask)
 
         del state
     torch.cuda.empty_cache()
@@ -230,50 +464,11 @@ def estimate_optical_flow(cam_color_dir: Path, out_dir_bwd: Path, out_dir_fwd: O
     bool
         True if optical flow estimation was successful, False otherwise.
     """
+
     def rotate_tensor_img(img, rotate):
         img_np = img.permute(1, 2, 0).byte().numpy()
-        if rotate == '90_CLOCKWISE':
-            img_np = cv2.rotate(img_np, cv2.ROTATE_90_CLOCKWISE)
-        elif rotate == '90_COUNTERCLOCKWISE':
-            img_np = cv2.rotate(img_np, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        elif rotate == '180':
-            img_np = cv2.rotate(img_np, cv2.ROTATE_180)
+        img_np = cv2.rotate(img_np, getattr(cv2, f'ROTATE_{rotate.upper()}'))
         return torch.from_numpy(img_np).permute(2, 0, 1).float()
-
-    def unrotate_flow(flow: torch.Tensor, rotate) -> torch.Tensor:
-        """
-        flow: (2, H, W) tensor, (u, v) = (x, y) in pixels
-        rotate: one of {'90_CLOCKWISE','90_COUNTERCLOCKWISE','180'} or None
-        """
-        if rotate is None:
-            return flow
-
-        # spatial rotation helper: rot90 k times CCW across H/W dims (1, 2)
-        def rot_ccw(x):
-            return torch.rot90(x, 1, (-2, -1))
-
-        def rot_cw(x):
-            return torch.rot90(x, -1, (-2, -1))
-
-        def rot_180(x):
-            return torch.rot90(x, 2, (-2, -1))
-
-        u, v = flow[0], flow[1]
-        if rotate == '90_CLOCKWISE':
-            # u = rotate_ccw(v'), v = -rotate_ccw(u')
-            u_new = rot_ccw(v)
-            v_new = -rot_ccw(u)
-        elif rotate == '90_COUNTERCLOCKWISE':
-            # u = -rotate_cw(v'), v = rotate_cw(u')
-            u_new = -rot_cw(v)
-            v_new = rot_cw(u)
-        elif rotate == '180':
-            # u = -rotate_180(u'), v = -rotate_180(v')
-            u_new = -rot_180(u)
-            v_new = -rot_180(v)
-        else:
-            return flow
-        return torch.stack((u_new, v_new), dim=0)
 
     color_files = sorted(cam_color_dir.glob('*.jpg'), key=lambda x: int(x.stem))
     if total_frames == -1:
@@ -341,8 +536,8 @@ def estimate_optical_flow(cam_color_dir: Path, out_dir_bwd: Path, out_dir_fwd: O
         scale_y = H_orig / H_net
         flow_pred[..., 0, :, :] *= scale_x
         flow_pred[..., 1, :, :] *= scale_y
-        flow_fwd = unrotate_flow(flow_pred[0, :, :], rotate)
-        flow_bwd = unrotate_flow(flow_pred[1, :, :], rotate)
+        flow_fwd = FlowUtils.rotate_flow(flow_pred[0, :, :], rotate, inverse=True)
+        flow_bwd = FlowUtils.rotate_flow(flow_pred[1, :, :], rotate, inverse=True)
 
         if 'fwd' in which:
             PathUtils.write_file(out_path[0] if isinstance(out_path, tuple) else out_path, flow_fwd, png_type='flow')
@@ -355,3 +550,19 @@ def estimate_optical_flow(cam_color_dir: Path, out_dir_bwd: Path, out_dir_fwd: O
     import gc
     gc.collect()
     return True
+
+
+if __name__ == '__main__':
+    import json
+
+    with open('/root/capturestudio2/out/reconstructions/Thanos_2_Perf_2/orbbec/cam01/mask/detections-1746110789224.json', 'r') as f:
+        first_frame_detections_ = json.load(f)
+    color_files_ = sorted(Path('/root/capturestudio2/out/reconstructions/Thanos_2_Perf_2/orbbec/cam01/color').glob('*.jpg'), key=lambda x: int(x.stem))
+    out_dir_ = Path('/root/capturestudio2/out/reconstructions/Thanos_2_Perf_2/orbbec/cam01/mask')
+    out_paths_ = [out_dir_ / cf.name for cf in color_files_]
+    segment(
+        video_path='/root/capturestudio2/out/reconstructions/Thanos_2_Perf_2/orbbec/cam01/color/video-000000-000500.mp4',
+        first_frame_detections=first_frame_detections_,
+        out_paths=out_paths_,
+        which_segmentor='sam2'
+    )

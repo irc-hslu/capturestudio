@@ -2,7 +2,7 @@ import json
 import multiprocessing
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, List, Tuple
+from typing import Literal, List, Tuple, Optional
 
 import numpy as np
 import pytorch3d.transforms.rotation_conversions
@@ -13,6 +13,7 @@ from transformations import quaternion_slerp
 from tasks import app, AutoRetryTask
 
 manifest_file_lock = multiprocessing.Lock()
+
 
 def _reconstruction(
         capturestudio_cache_root: str,
@@ -28,8 +29,12 @@ def _reconstruction(
         disparity_estimator_checkpoint: str = 'neptune://154/best',
         gs_regressor_model: str = 'gps',
         gs_regressor_checkpoint: str = 'neptune://154/best',
+        orbit_type: Literal['audience', 'interpolated'] = 'interpolated',
         force: bool = False,
-        calibration_method: Literal['MultiCamCalib', 'Caliscope'] = 'MultiCamCalib'):
+        calibration_method: Literal['MultiCamCalib', 'Caliscope'] = 'Caliscope',
+        rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None,
+        camera_orbit_velocity: float = 0.3,
+        save_ply: bool = False):
     from reconstruction.data.capturestudio import MultiSessionDataset
     from reconstruction.eval.metrics import MetricsAggregator
     from reconstruction.vis.dataset_visualizer import DatasetVisualizer
@@ -52,13 +57,17 @@ def _reconstruction(
     )
     dataset_visualizer_ = DatasetVisualizer(
         dataset=dataset_,
-        camera_orbit=dataset_.get_camera_orbit(bezier_degree=3),
+        camera_orbit=dataset_.get_camera_orbit(
+            bezier_degree=3,
+            orbit_type=orbit_type
+        ),
         frame_creators=[
             FrameCreator.from_num_cameras(
                 num_cameras=len(cam_idx),
                 mode=f'{vis_modality}_recon|{vis_modality}_gt',
                 main_size_hw=image_size_hw,
-                evaluator=MetricsAggregator.for_psnr()
+                evaluator=MetricsAggregator.for_psnr(),
+                rotate=rotate
             )
             for vis_modality in ['rgb', 'depth', 'feat']
         ]
@@ -76,9 +85,9 @@ def _reconstruction(
         disparity_estimator_checkpoint=disparity_estimator_checkpoint,
         gs_regressor_model=gs_regressor_model,
         gs_regressor_checkpoint=gs_regressor_checkpoint,
-        camera_orbit_velocity=0.3,  # m/s (arc length)
+        camera_orbit_velocity=camera_orbit_velocity,  # m/s (arc length)
         split_stereo=True,
-        save_ply=True,
+        save_ply=save_ply,
         force=force
     )
 
@@ -183,7 +192,12 @@ def pcd_reconstruction(capturestudio_cache_root: str,
                        image_size_hw: Tuple[int, int] = (1024, 1024),
                        disparity_estimator_model: str = 'raftstereo',
                        disparity_estimator_checkpoint: str = 'neptune://154/best',
-                       force: bool = False):
+                        orbit_type: Literal['audience', 'interpolated'] = 'interpolated',
+                       force: bool = False,
+                       calibration_method: Literal['MultiCamCalib', 'Caliscope'] = 'MultiCamCalib',
+                       rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None,
+                       camera_orbit_velocity: float = 0.3,
+                       save_ply: bool = False):
     return _reconstruction(
         capturestudio_cache_root=capturestudio_cache_root,
         calibration_session_name=calibration_session_name,
@@ -196,7 +210,12 @@ def pcd_reconstruction(capturestudio_cache_root: str,
         image_size_hw=image_size_hw,
         disparity_estimator_model=disparity_estimator_model,
         disparity_estimator_checkpoint=disparity_estimator_checkpoint,
-        force=force
+        orbit_type=orbit_type,
+        force=force,
+        calibration_method=calibration_method,
+        rotate=rotate,
+        camera_orbit_velocity=camera_orbit_velocity,
+        save_ply=save_ply
     )
 
 
@@ -213,7 +232,12 @@ def gs_reconstruction(capturestudio_cache_root: str,
                       disparity_estimator_checkpoint: str = 'neptune://154/best',
                       gs_regressor_model: str = 'gps',
                       gs_regressor_checkpoint: str = 'neptune://154/best',
-                      force: bool = False):
+                      orbit_type: Literal['audience', 'interpolated'] = 'interpolated',
+                      force: bool = False,
+                      calibration_method: Literal['MultiCamCalib', 'Caliscope'] = 'MultiCamCalib',
+                      rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None,
+                      camera_orbit_velocity: float = 0.3,
+                      save_ply: bool = False):
     return _reconstruction(
         capturestudio_cache_root=capturestudio_cache_root,
         calibration_session_name=calibration_session_name,
@@ -228,7 +252,12 @@ def gs_reconstruction(capturestudio_cache_root: str,
         disparity_estimator_checkpoint=disparity_estimator_checkpoint,
         gs_regressor_model=gs_regressor_model,
         gs_regressor_checkpoint=gs_regressor_checkpoint,
-        force=force
+        orbit_type=orbit_type,
+        force=force,
+        calibration_method=calibration_method,
+        rotate=rotate,
+        camera_orbit_velocity=camera_orbit_velocity,
+        save_ply=save_ply
     )
 
 

@@ -1,10 +1,6 @@
-# COPYRIGHT 2024 by Athanasios Charisoudis <athanasios.charisoudis@ieee.org>
-# Licensed under the Apache License, Version 2.0 (the "License");
-# Original source: https://github.com/charisoudis/flowforge
-
 import os
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Literal
 
 import cv2
 import numpy as np
@@ -585,3 +581,60 @@ class FlowUtils:
             flow_out = flow_rs.squeeze(0)
 
         return flow_out
+
+    @staticmethod
+    def rotate_flow(flow: torch.Tensor, rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None, inverse: bool = False) -> torch.Tensor:
+        """
+        Rotate optical flow by specified angle.
+
+        Parameters:
+        -----------
+        flow: torch.Tensor
+            Optical flow tensor of shape (2, H, W).
+        rotate: str, optional
+            Rotation direction. Options are '90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180'.
+            If None, no rotation is applied.
+        inverse: bool, optional
+            If True, applies the inverse rotation.
+
+        Returns:
+        --------
+        torch.Tensor
+            Rotated optical flow tensor of shape (2, H', W').
+        """
+        if rotate is None:
+            return flow
+        if inverse:
+            if rotate == '90_COUNTERCLOCKWISE':
+                rotate = '90_CLOCKWISE'
+            elif rotate == '90_CLOCKWISE':
+                rotate = '90_COUNTERCLOCKWISE'
+            # '180' remains the same
+
+        # spatial rotation helper: rot90 k times CCW across H/W dims (1, 2)
+        def rot_ccw(x):
+            return torch.rot90(x, 1, (-2, -1))
+
+        def rot_cw(x):
+            return torch.rot90(x, -1, (-2, -1))
+
+        def rot_180(x):
+            return torch.rot90(x, 2, (-2, -1))
+
+        u, v = flow[0], flow[1]
+        if rotate == '90_COUNTERCLOCKWISE':
+            # u = rotate_ccw(v'), v = -rotate_ccw(u')
+            u_new = rot_ccw(v)
+            v_new = -rot_ccw(u)
+        elif rotate == '90_CLOCKWISE':
+            # u = -rotate_cw(v'), v = rotate_cw(u')
+            u_new = -rot_cw(v)
+            v_new = rot_cw(u)
+        elif rotate == '180':
+            # u = -rotate_180(u'), v = -rotate_180(v')
+            u_new = -rot_180(u)
+            v_new = -rot_180(v)
+        else:
+            raise ValueError(f"Unsupported rotation: {rotate}")
+
+        return torch.stack((u_new, v_new), dim=0)

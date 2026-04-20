@@ -4,7 +4,7 @@ This is the **official code repository** for the paper:
 
 > **A Fast Volumetric Capture and Reconstruction Pipeline for Dynamic Point Clouds and Gaussian Splats**  
 > Athanasios Charisoudis, Simone Croci, Lam Kit Yung, Pascal Frossard, Aljosa Smolic  
-> *European Conference on Visual Media Production (CVMP ’25)*  
+> *European Conference on Visual Media Production (CVMP '25)*  
 > DOI: [10.1145/3756863.3769713](https://doi.org/10.1145/3756863.3769713)
 
 Project page: https://irc-hslu.github.io/capturestudio  
@@ -20,7 +20,7 @@ The code for the HSLU CaptureStudio pipeline (capture, reconstruction, and expor
 - [x] documented
 - [x] prepared for a public release
 - [x] initial version out (v1)
-- [ ] incorporate v2 improvements (in progress)
+- [x] incorporated v2 improvements
 - [ ] complete requirements.txt
 - [ ] scripts for reconstruction and export
 
@@ -36,26 +36,10 @@ Please refer to the model card and repository contents there for the available v
 
 ---
 
-## Early Access / Urgent Requests
-
-If you urgently need access to parts of the code, or have specific research / industry use cases, feel free to reach out:
-
-**Athanasios Charisoudis**  
-Lucerne University of Applied Sciences and Arts (HSLU)  
-📧 athanasios.charisoudis@hslu.ch
-
-I’m happy to discuss:
-
-- early access to parts of the pipeline (where possible)
-- collaborations
-- reproducibility questions
-- integration into your own projects
-
----
-
 ## Repo Structure
 
 The repository is organized as follows:
+
 - `docs/`: Project website (based on aifolio template)
 - `recon-viewer/`: Interactive viewer for reconstructed dynamic point clouds and Gaussian splats
 - `src/`: Main source code for the HSLU CaptureStudio pipeline
@@ -64,46 +48,51 @@ The repository is organized as follows:
 
 ## How to Run the Celery-based Processing and Reconstruction Pipeline
 
-1. Install celery system-wide:
+1. Install Celery system-wide:
    ```bash
    sudo apt update
    sudo apt install -y celery
    ```
+
 2. Install the Python dependencies:
    ```bash
    python -m pip install celery redis
    ```
 
-   3. Open 3 terminals and run the following commands in each (after cding to the `src` directory):
-        Start 12 cpu workers:
-      ```bash
-       celery -A tasks worker --loglevel=INFO --concurrency=12 --max-tasks-per-child=1 -Q cpu --hostname=cpu@%h
-       ```
-        Start 2 gpu workers:
-       ```bash
-       celery -A tasks worker --loglevel=INFO --concurrency=2 --max-tasks-per-child=1 -Q gpu --hostname=gpu@%h
-       ```
-        Start flower monitoring tool:
-       ```bash 
-       celery -A tasks flower --port=5555
-       ```
+3. Open 3 terminals and run the following commands in each (after changing to the `src` directory):
+
+   Start 12 CPU workers:
+   ```bash
+   celery -A tasks worker --loglevel=INFO --concurrency=12 --max-tasks-per-child=1 -Q cpu --hostname=cpu@%h
+   ```
+
+   Start 2 GPU workers:
+   ```bash
+   celery -A tasks worker --loglevel=INFO --concurrency=2 --max-tasks-per-child=1 -Q gpu --hostname=gpu@%h
+   ```
+
+   Start Flower monitoring tool:
+   ```bash
+   celery -A tasks flower --port=5555
+   ```
 
 4. Run the submission script to start the tasks:
    ```bash
    python src/_misc/submission_scripts/apr_may_2025.py
    ```
-   Edit the `src/_misc/submission_scripts/apr_may_2025.py` by providing the performances that you want to run the tasks on.
-    
-    See also other scripts in src/_misc/submission_scripts/
+
+   Edit `src/_misc/submission_scripts/apr_may_2025.py` by providing the performances that you want to run the tasks on.
+
+   See also other scripts in `src/_misc/submission_scripts/`.
 
 5. Open your browser and go to `http://localhost:5555` to access the Flower monitoring tool.
 
-
 6. Handling failed tasks:
-    If any tasks fail, you can retry them by first restarting celery workers and run the submission script (successfully finished tasks are not redone). To do that, first clear the queues by running in src directory:
+
+   If any tasks fail, you can retry them by first restarting Celery workers and running the submission script again (successfully finished tasks are not redone). To do that, first clear the queues by running in the `src` directory:
    ```bash
    sudo rabbitmqctl purge_queue cpu && sudo rabbitmqctl purge_queue gpu && redis-cli flushdb && celery -A tasks control shutdown
-    ```
+   ```
 
 ---
 
@@ -134,3 +123,11 @@ If you use this work in your research, please cite:
     series = {CVMP '25}
 }
 ```
+
+---
+
+## Contact
+
+**Athanasios Charisoudis**  
+Immersive Realities Center, Hochschule Luzern  
+athanasios.charisoudis@hslu.ch

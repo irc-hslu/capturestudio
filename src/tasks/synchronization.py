@@ -21,9 +21,38 @@ def synchronize_frames(capturestudio_cache_root: str, excel_sheet: str = 'Apr_Ma
     from preprocessing.sync import synchronize_frames_for_session
     sync_successful = synchronize_frames_for_session(capturestudio_cache_root, excel_sheet, excel_file_path)
     if sync_successful:
-        return None
+        from preprocessing.sync import check_all_cams_have_equal_number_of_frames
+        check_result = check_all_cams_have_equal_number_of_frames(capturestudio_cache_root)
+        if check_result:
+            return None
+        raise RuntimeError(f"Synchronization failed for session {Path(capturestudio_cache_root).name} (CAMS DO NOT HAVE EQUAL NUMBER OF FRAMES).")
     # raise an error to stop chain of tasks
     raise RuntimeError(f"Synchronization failed for session {Path(capturestudio_cache_root).name}.")
+
+
+@app.task(name="synchronization.trim_frames", base=AutoRetryTask)
+def trim_frames(capturestudio_cache_root: str, start_frame: int, total_frames: int = -1):
+    """
+    Trim frames for a session based on the timestamps found in the frame filenames or external flash sync signal.
+    IMPORTANT: This task assumes that the frames have already been synchronized.
+
+    Parameters
+    ----------
+    capturestudio_cache_root: str
+        Path to the session folder containing camera directories, e.g. "/mnt/fdata/CAPTURESTUDIO_CACHE/Thanos_2_Perf_1".
+    start_frame: int
+        How many frames to leave from the common start point.
+    total_frames: int, optional
+        The total number of frames to include in the trimmed session, or -1 to include all frames from the start frame onwards.
+    """
+    from preprocessing.sync import trim_frames_for_session
+    trim_frames_for_session(capturestudio_cache_root, start_frame, total_frames)
+
+    from preprocessing.sync import check_all_cams_have_equal_number_of_frames
+    check_result = check_all_cams_have_equal_number_of_frames(capturestudio_cache_root)
+    if check_result:
+        return None
+    raise RuntimeError(f"Synchronization failed for session {Path(capturestudio_cache_root).name} (CAMS DO NOT HAVE EQUAL NUMBER OF FRAMES).")
 
 
 @app.task(name="synchronization.generate_multiview_video", base=AutoRetryTask)

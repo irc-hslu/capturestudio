@@ -1,8 +1,7 @@
 import os
-import re
 import subprocess
 from pathlib import Path
-from typing import Union, Literal
+from typing import Union, Literal, Optional
 
 import cv2
 import numpy as np
@@ -10,7 +9,7 @@ import numpy as np
 from utils.misc import log, PathUtils
 
 
-def frames_to_video(frame_dir: Union[Path, str], start_offset: int = 0, total_frames: int = -1, fps: int = 30, celery_app=None):
+def frames_to_video(frame_dir: Union[Path, str], start_offset: int = 0, total_frames: int = -1, fps: int = 30, rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None, celery_app=None):
     frame_dir = Path(frame_dir)
     # Get all color files
     color_files = sorted(frame_dir.glob('*.jpg'), key=lambda x: int(x.stem))
@@ -50,17 +49,37 @@ def frames_to_video(frame_dir: Union[Path, str], start_offset: int = 0, total_fr
         except Exception:
             pass
 
-    # Generate the video460870
+    # Generate the video460870 (rotation handling via FFmpeg filters (pixel rotation))
+    vf = None
+    if rotate is not None:
+        if rotate == "90_CLOCKWISE":
+            # 90 deg clockwise
+            vf = "transpose=1"
+        elif rotate == "90_COUNTERCLOCKWISE":
+            # 90 deg counterclockwise
+            vf = "transpose=2"
+        elif rotate == "180":
+            # 180 deg rotation (equivalent to transpose twice, but flip chain is simple and fast)
+            vf = "hflip,vflip"
+        else:
+            raise ValueError(f"Unsupported rotate value: {rotate!r}")
+
     cmd = [
         "ffmpeg", "-y",
         "-f", "concat",
         "-safe", "0",
         "-r", str(fps),
         "-i", str(video_path.with_suffix('.txt')),
+    ]
+
+    if vf is not None:
+        cmd += ["-vf", vf]
+
+    cmd += [
         "-c:v", "h264_nvenc",
         "-preset", "fast",
         "-pix_fmt", "yuv420p",
-        str(video_path)
+        str(video_path),
     ]
     process = subprocess.Popen(
         cmd,
@@ -166,8 +185,18 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
             main_frame = cv2.applyColorMap((main_frame * 255).astype(np.uint8), cv2.COLORMAP_INFERNO)
         # Highlight the satellite frame which is the main frame
         resized_frames[main_idx] = cv2.rectangle(resized_frames[main_idx], (0, 0), (small_width - 1, small_height - 1), (144, 238, 144), 1)
+
+        if len(all_cam_dirs) == 7:
+            # Create a black frame for the 8th slot
+            black_frame = np.zeros((small_height, small_width, 3), dtype=np.uint8)
+            # Append it so the 8-cam logic works seamlessly
+            resized_frames.append(black_frame)
+            num_cams_for_layout = 8
+        else:
+            num_cams_for_layout = len(all_cam_dirs)
+
         # create frame
-        if len(all_cam_dirs) == 12:
+        if num_cams_for_layout == 12:
             canvas = np.concatenate([
                 np.concatenate([dummy_frame1.copy(), *resized_frames[:4]], axis=0),
                 np.concatenate([
@@ -176,7 +205,7 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
                 ], axis=0),
                 np.concatenate([dummy_frame1.copy(), *resized_frames[-4:][::-1]], axis=0),
             ], axis=1)
-        elif len(all_cam_dirs) == 8:
+        elif num_cams_for_layout == 8:
             canvas = np.concatenate([
                 np.concatenate([dummy_frame3.copy(), *resized_frames[:2]], axis=0),
                 np.concatenate([
@@ -185,7 +214,7 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
                 ], axis=0),
                 np.concatenate([dummy_frame3.copy(), *resized_frames[-2:][::-1]], axis=0),
             ], axis=1)
-        elif len(all_cam_dirs) == 6:
+        elif num_cams_for_layout == 6:
             canvas = np.concatenate([
                 np.concatenate([dummy_frame4.copy(), resized_frames[0]], axis=0),
                 np.concatenate([
@@ -194,13 +223,13 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
                 ], axis=0),
                 np.concatenate([dummy_frame4.copy(), resized_frames[-1]], axis=0),
             ], axis=1)
-        elif len(all_cam_dirs) == 4 or len(all_cam_dirs) == 5:
+        elif num_cams_for_layout == 4 or num_cams_for_layout == 5:
             canvas = np.concatenate([
                 main_frame,
                 np.concatenate(resized_frames, axis=1),
             ], axis=0)
         else:
-            raise ValueError(f"Unsupported number of cameras: {len(all_cam_dirs)}. Expected 12, 8, 6, or 4 cameras for multicam depth video generation.")
+            raise ValueError(f"Unsupported number of cameras: {num_cams_for_layout}. Expected 4-8, 12 cameras for multicam depth video generation.")
 
         if video_writer is None:
             video_writer = cv2.VideoWriter(

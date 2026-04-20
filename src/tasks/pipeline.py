@@ -7,6 +7,8 @@ from typing import Any, List, Sequence, Tuple, Union
 
 import numpy as np
 
+from utils.misc import log
+
 
 @dataclass(frozen=True)
 class TaskSpec:
@@ -452,7 +454,7 @@ class Pipeline:
                         barrier_y = max(start_y + 40, end_y - reserved_for_body)
                     else:
                         # your existing behavior
-                        barrier_y = start_y + height * 0.45 + 40 # + barrier_pad
+                        barrier_y = start_y + height * 0.45 + 40  # + barrier_pad
 
                     # draw the barrier EXACTLY at barrier_y (do NOT add barrier_pad here)
                     draw_barrier(barrier_y, x_left - theme.barrier_stub / 2, x_right + theme.barrier_stub / 2)
@@ -517,3 +519,4 @@ class Pipeline:
                 f.write(svg_text)
         else:
             raise ValueError(f"Unsupported SVG output format: {svg_path.suffix}. Use .svg or .pdf.")
+        log(f'[{self.__class__.__name__}::to_svg] Pipeline plot exported to {svg_path}')

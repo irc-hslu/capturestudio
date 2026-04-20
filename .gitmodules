@@ -4,3 +4,6 @@
 [submodule "resources/submodules/foundationstereo"]
 	path = resources/submodules/foundationstereo
 	url = https://github.com/NVlabs/FoundationStereo.git
+[submodule "annotator"]
+	path = annotator
+	url = git@github.com:irc-hslu/capturestudio-annotate.git
