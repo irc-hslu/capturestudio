@@ -51,7 +51,7 @@ class CalibrationData:
             _preprocessing_transforms=new_transforms
         )
 
-    def create_cameras(self, mean_idx: List[int] | Literal['all'] = 'all', device: torch.device | str = 'cpu', lib: str = 'pytorch3d') -> Tuple[Any, torch.Tensor, torch.Tensor]:
+    def create_cameras(self, mean_idx: List[int] | Literal['all'] = 'all', device: Union[str, torch.device] = 'cpu', lib: str = 'pytorch3d') -> Tuple[Any, torch.Tensor, torch.Tensor]:
         assert lib in ['open3d', 'pytorch3d'], f"Invalid library: {lib}. Choose 'pytorch3d' or 'kaolin'"
         from utils.vis import VisUtils
         if lib == 'open3d':
@@ -75,7 +75,7 @@ class CalibrationData:
         )
         return cameras, mean_look_at_point, mean_up_vector
 
-    def create_camera_plane(self, plane_idx: List[int] | Literal['all'] = 'all', device: torch.device | str = 'cpu') -> Tuple[torch.Tensor, torch.Tensor]:
+    def create_camera_plane(self, plane_idx: List[int] | Literal['all'] = 'all', device: Union[str, torch.device] = 'cpu') -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Fits a plane to the camera translation vectors using SVD.
 

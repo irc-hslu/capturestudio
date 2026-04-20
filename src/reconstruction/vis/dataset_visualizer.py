@@ -166,9 +166,16 @@ class DatasetVisualizer:
                     virtual_intrinsic=t_cam_intrinsic,
                     virtual_extrinsic=t_cam_extrinsic_c2w,
                     is_c2w=True,
-                    assignment=[t_cam_gt_idx_closest] if 'stereo' not in recon_type else [t_cam_gt_idx_middle],
+                    # TODO SIMONE_MERGING_PATCH SOLUTION ONE
+                    # assignment=[t_cam_gt_idx_closest, t_cam_gt_idx_closest + (1 if t_cam_gt_idx_closest < (len(t_images)-1) else -1)] if 'stereo' not in recon_type else [t_cam_gt_idx_middle, t_cam_gt_idx_middle + (1 if t_cam_gt_idx_middle < (len(t_images)-1) else -1)],  # ORIGINAL CODE
+                    assignment=[t_cam_gt_idx_closest] if 'stereo' not in recon_type else [t_cam_gt_idx_middle],  # ORIGINAL CODE
+                    # assignment = list(range(4)), # NEW LINE
                     virtual_image_size_hw=self.camera_orbit.gt_image_size_hw,
+                    **self.camera_orbit._floor_wall_data
                 )
+                # cv2.imwrite('/root/capturestudio2/src/hii.png', cv2.cvtColor(video_frame, cv2.COLOR_RGB2BGRA))
+                # print('stored')
+                # exit(0)
 
                 if video_writers[fci] is None:
                     video_writers[fci] = cv2.VideoWriter(
@@ -245,6 +252,11 @@ class DatasetVisualizer:
 
 
 if __name__ == "__main__":
+    # ---------
+    # ATTENTION: The new rendering/visualization code has been moved to ./teaser/base_<RENDER_LIB:{open3d,moderngl,viser}>.py
+    #            Please consult these files unless you really want to try the old DatasetVisualizer class.
+    # ---------
+
     from reconstruction.data.capturestudio import MultiSessionDataset
     from reconstruction.eval.metrics import MetricsAggregator
     from reconstruction.vis.teaser import create_teaser_video, create_teaser_grid

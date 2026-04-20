@@ -15,7 +15,7 @@ from moviepy.editor import (
 from utils.misc import PathUtils, log
 
 
-def create_teaser_video(cfg, force=False):
+def create_teaser_rgb_depth_normals_video(cfg, force=False):
     if Path(cfg["output"]).exists() and not force:
         log(f"Teaser video {cfg['output']} already exists. Skipping creation.", 'debug')
         return
@@ -298,7 +298,7 @@ if __name__ == "__main__":
                     "depth": 0.15,
                 },
             }
-            create_teaser_video(cfg_)
+            create_teaser_rgb_depth_normals_video(cfg_)
             if out_path_.exists():
                 video_paths_.append(out_path_)
                 labels_.append(f'{MODALITY_} {PREFIX_}'.replace("_split","").replace("_", " ").upper())
