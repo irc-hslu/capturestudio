@@ -12,6 +12,14 @@ Paper: https://doi.org/10.1145/3756863.3769713
 
 ---
 
+## Light Variant for Multi-RGBD ORBBEC Capture
+
+If you only want to capture using multiple RGBD ORBBEC sensors, please see the light variant, which is easier to install and run:
+
+https://github.com/irc-hslu/capturestudio-light
+
+---
+
 ## Code Release Status
 
 The code for the HSLU CaptureStudio pipeline (capture, reconstruction, and export of dynamic point clouds and Gaussian splats) is currently being:
