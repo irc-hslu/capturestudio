@@ -3,17 +3,17 @@ import functools
 import os
 from pathlib import Path
 from typing import Optional, Tuple, Literal, Union, Dict, List, Any
+from warnings import deprecated
 
 import cv2
 import numpy as np
+import open3d as o3d
 import torch
+from scipy.spatial import cKDTree
 
+from utils.calib import CalibrationData
 from utils.misc import log, env_get, PathUtils, Str
 from utils.vis import VisUtils
-
-os.environ['PYOPENGL_PLATFORM'] = env_get('PYOPENGL_PLATFORM', 'egl')
-import open3d as o3d
-from utils.calib import CalibrationData
 
 
 # noinspection PyArgumentList,PyTypeHints
@@ -182,6 +182,7 @@ class RGBDImage:
             pixel_colors=pixel_colors,
             pixel_valid=(self.depth > 0.0) & np.isfinite(self.depth) & self.mask & ~np.isnan(np.asarray(pcd_o3d.points).reshape([*self.depth.shape, 3])).any(-1),
             pixel_features=self.features,
+            extrinsics_c2w=np.linalg.inv(self.extrinsic_w2c)
         )
 
     def reproject(self, target_intrinsic: np.ndarray, target_extrinsic: np.ndarray, target_image_size_hw: Tuple[int, int], is_c2w: bool = True, use_cache: bool = False, **render_kwargs) -> 'RGBDImage':
@@ -485,7 +486,6 @@ class RGBDImage:
         """
         if feat == 'depth':
             dmin, dmax = depth_range if depth_range is not None else (np.nanmin(self.depth[self.mask]), np.nanmax(self.depth[self.mask]))
-            print(dmin, dmax)
             depth_vis = ((self.depth.clip(dmin, dmax) - dmin) / (dmax - dmin) * 255).astype(np.uint8)
             valid_mask = (self.depth > 0) & np.isfinite(self.depth)
             depth_in_mask = depth_vis[valid_mask]
@@ -637,7 +637,16 @@ class RGBDImage:
         return RGBDImage(rgb=rgb_r, mask=mask_r, depth=depth_r, intrinsic=Kp, extrinsic_w2c=Tw2c_p)
 
     @staticmethod
-    def estimate_floor(*rgbd_images: 'RGBDImage', export: bool = False, export_path: Optional[Union[Path, str]] = None) -> Dict[str, np.ndarray]:
+    @deprecated('RGBDImage::estimate_floor is now deprecated in favor of the new more complete and feature-rich class found in vis/teaser/base.py. Please use that instead.')
+    def estimate_floor(
+            *rgbd_images: 'RGBDImage',
+            wall_overshoot_m: float = 2.0,
+            wall_height_m: float = 3.0,
+            wall_pad_width_m: float = 1.0,
+            floor_depth_scale: float = 1.5,  # NEW: scale factor for floor depth (length)
+            export: bool = False,
+            export_path: Optional[Union[Path, str]] = None
+    ) -> Dict[str, Optional[Union[np.ndarray, float, int]]]:
         from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
 
         MODEL_NAME = "nvidia/segformer-b4-finetuned-ade-512-512"
@@ -646,7 +655,8 @@ class RGBDImage:
         processor = AutoImageProcessor.from_pretrained(MODEL_NAME, use_fast=True)
         model = AutoModelForSemanticSegmentation.from_pretrained(MODEL_NAME, dtype=dtype).to(device).eval()
         id2label = {int(k): v for k, v in model.config.id2label.items()}
-        floor_ids = [k for k, v in id2label.items() if any(t in v.lower() for t in ("floor", "ground", "road", "sidewalk", "pavement"))] or [0]
+        floor_ids = [k for k, v in id2label.items()
+                     if any(t in v.lower() for t in ("floor", "ground", "road", "sidewalk", "pavement"))] or [0]
         rng = np.random.default_rng(0)
 
         def seg_floor_prob(rgb: np.ndarray) -> np.ndarray:
@@ -657,12 +667,15 @@ class RGBDImage:
                 inp = {k: v.to(device, dtype=model.dtype) for k, v in inp.items()}
                 with torch.inference_mode():
                     logits = model(**inp).logits
-                    logits = torch.nn.functional.interpolate(logits, size=(H, W), mode="bilinear", align_corners=False)[0]
+                    logits = torch.nn.functional.interpolate(
+                        logits, size=(H, W), mode="bilinear", align_corners=False
+                    )[0]
                     p = logits.softmax(dim=0)[floor_ids].sum(dim=0).float().cpu().numpy()
                 return np.clip(p, 0, 1).astype(np.float32)
+
             step = max(1, tile - overlap)
-            acc = np.zeros((H, W), np.float32)
-            cnt = np.zeros((H, W), np.float32)
+            acc = np.zeros((H, W), dtype=np.float32)
+            cnt = np.zeros((H, W), dtype=np.float32)
             for y in range(0, H, step):
                 for x in range(0, W, step):
                     y1, x1 = min(H, y + tile), min(W, x + tile)
@@ -671,15 +684,21 @@ class RGBDImage:
                     inp = {k: v.to(device, dtype=model.dtype) for k, v in inp.items()}
                     with torch.inference_mode():
                         logits = model(**inp).logits
-                        logits = torch.nn.functional.interpolate(logits, size=patch.shape[:2], mode="bilinear", align_corners=False)[0]
+                        logits = torch.nn.functional.interpolate(
+                            logits, size=patch.shape[:2], mode="bilinear", align_corners=False
+                        )[0]
                         p = logits.softmax(dim=0)[floor_ids].sum(dim=0).float().cpu().numpy()
                     acc[y:y1, x:x1] += p
                     cnt[y:y1, x:x1] += 1.0
             return np.clip(acc / np.maximum(cnt, 1e-6), 0, 1).astype(np.float32)
 
         overlays: List[np.ndarray] = [] if export else None
-        per_view_planes: List[Dict[str, Any]] = []
+        per_view_planes: List[Optional[Dict[str, Any]]] = []
         per_view_probs: List[np.ndarray] = []
+        rgb_cache: List[Optional[np.ndarray]] = []
+        K_cache: List[Optional[np.ndarray]] = []
+        w2c_cache: List[Optional[np.ndarray]] = []
+
         all_pts, all_w = [], []
 
         for img in rgbd_images:
@@ -687,9 +706,16 @@ class RGBDImage:
                 if export: overlays.append(np.zeros((1, 1, 3), np.uint8))
                 per_view_planes.append(None)
                 per_view_probs.append(None)
+                rgb_cache.append(None)
+                K_cache.append(None)
+                w2c_cache.append(None)
                 continue
 
             rgb = img.rgb if img.rgb.dtype == np.uint8 else np.clip(img.rgb, 0, 255).astype(np.uint8)
+            rgb_cache.append(rgb.copy())
+            K_cache.append(np.asarray(img.intrinsic, dtype=np.float64) if hasattr(img, "intrinsic") else None)
+            w2c_cache.append(np.asarray(img.extrinsic_w2c, dtype=np.float64) if hasattr(img, "extrinsic_w2c") else None)
+
             prob = seg_floor_prob(rgb)
             seg = (prob >= 0.5)
             per_view_probs.append(prob)
@@ -699,23 +725,23 @@ class RGBDImage:
             m = seg & valid_depth & finite_pw
 
             if export:
-                import numpy as _np  # avoid shadow
+                import numpy as _np
                 base = rgb.astype(_np.float32)
                 orange = _np.array([255, 165, 0], _np.float32)
                 for c in range(3):
                     ch = base[..., c]
-                    ch[seg] = orange[c] * 0.30 + ch[seg] * 0.70
+                    ch[seg] = orange[c] * 0.35 + ch[seg] * 0.65
                     base[..., c] = ch
                 overlays.append(base.clip(0, 255).astype(np.uint8))
 
             if np.count_nonzero(m) >= 50:
                 P = Pw[m].astype(np.float64)
-                w = (prob[m].astype(np.float64) + 1e-3)
-                w /= (w.sum() + 1e-12)
-                mu = (w[:, None] * P).sum(0)
+                wloc = (prob[m].astype(np.float64) + 1e-3)
+                wloc /= (wloc.sum() + 1e-12)
+                mu = (wloc[:, None] * P).sum(0)
                 X0 = P - mu
-                Xw = (np.sqrt(w)[:, None] * X0)
-                U, S, Vt = np.linalg.svd(Xw, full_matrices=False)
+                Xw = (np.sqrt(wloc)[:, None] * X0)
+                _, _, Vt = np.linalg.svd(Xw, full_matrices=False)
                 n = Vt[-1]
                 d = -n @ mu
                 per_view_planes.append({"normal_world": n.astype(np.float64), "offset_world": float(d)})
@@ -725,12 +751,25 @@ class RGBDImage:
                 per_view_planes.append(None)
 
         if not all_pts:
-            return {"normal": np.array([0, 0, 1], np.float64), "offset": 0.0, "per_view_planes": per_view_planes, "out_path_ply": None, "wall_normal": None, "wall_offset": None}
+            return {
+                "floor_corners_world": None,
+                "floor_normal": None,
+                "floor_offset": None,
+                "wall_corners_world": None,
+                "wall_normal": None,
+                "wall_offset": None,
+                "mean_lookat_world": None,
+                "arc_end0_world": None,
+                "arc_end1_world": None,
+                "chord_midpoint_world": None,
+                "wall_overshoot_m": wall_overshoot_m,
+            }
 
         X = np.concatenate(all_pts, 0).reshape(-1, 3)
         w = np.concatenate(all_w, 0).reshape(-1)
         X = X[np.isfinite(X).all(-1)]
         w = w[:X.shape[0]]
+
         if X.shape[0] > 1_000_000:
             psub = w / (w.sum() + 1e-12)
             idx = rng.choice(X.shape[0], 1_000_000, replace=False, p=psub)
@@ -761,7 +800,7 @@ class RGBDImage:
             mu = (w[:, None] * X).sum(0)
             X0 = X - mu
             Xw = (np.sqrt(np.maximum(w, 1e-12))[:, None] * X0)
-            U, S, Vt = np.linalg.svd(Xw, full_matrices=False)
+            _, _, Vt = np.linalg.svd(Xw, full_matrices=False)
             n_final = Vt[-1]
             d_final = -n_final @ mu
             inliers = np.abs(X @ n_final + d_final) <= tau
@@ -772,519 +811,371 @@ class RGBDImage:
             mu = (wr[:, None] * Xr).sum(0)
             X0 = Xr - mu
             Xw = (np.sqrt(wr)[:, None] * X0)
-            U, S, Vt = np.linalg.svd(Xw, full_matrices=False)
+            _, _, Vt = np.linalg.svd(Xw, full_matrices=False)
             n_final = Vt[-1]
             d_final = -n_final @ mu
             inliers = best_inl
 
-        perp_dot_max = 0.2
-        stride_w = 4
-        wall_local_pts_world: List[np.ndarray] = []
-        wall_local_planes: List[Dict[str, Any]] = []
+        floor_normal = n_final.astype(np.float64)
+        floor_offset = float(d_final)
+        Xin = X[inliers]
 
-        for vi, img in enumerate(rgbd_images):
-            if img is None or img.depth is None or per_view_planes[vi] is None:
-                wall_local_planes.append(None)
-                continue
-
-            n_floor_v = per_view_planes[vi]["normal_world"].astype(np.float64)
-            Pw = img.points_world
-            valid = np.isfinite(img.depth) & (img.depth > 0) & np.isfinite(Pw).all(-1)
-            if not np.any(valid):
-                wall_local_planes.append(None)
-                continue
-
-            sel = valid[::stride_w, ::stride_w]
-            Xv = Pw[::stride_w, ::stride_w][sel].reshape(-1, 3).astype(np.float64)
-            if Xv.shape[0] < 300:
-                wall_local_planes.append(None)
-                continue
-
-            scale_v = float(np.median(np.linalg.norm(Xv, axis=1)))
-            tau_w = max(0.006, 0.01 * scale_v)
-
-            best_cnt_v, best_n_v, best_d_v, best_inl_v = -1, None, None, None
-            it_v = 2000
-            for _ in range(it_v):
-                idx3 = rng.choice(Xv.shape[0], 3, replace=False)
-                a, b, c = Xv[idx3]
-                n = np.cross(b - a, c - a)
-                nn = np.linalg.norm(n)
-                if nn < 1e-9: continue
-                n /= nn
-                if abs(float(n @ n_floor_v)) > perp_dot_max:
-                    continue
-                d = -float(n @ a)
-                dist = np.abs(Xv @ n + d)
-                inl = dist <= tau_w
-                cnt = int(inl.sum())
-                if cnt > best_cnt_v:
-                    best_cnt_v, best_n_v, best_d_v, best_inl_v = cnt, n.copy(), d, inl
-
-            if best_n_v is None or best_cnt_v < 200:
-                wall_local_planes.append(None)
-                continue
-
-            Xrin = Xv[best_inl_v]
-            mu = Xrin.mean(0)
-            X0 = Xrin - mu
-            U, S, Vt = np.linalg.svd(X0, full_matrices=False)
-            n_ref = Vt[-1]
-            if abs(float(n_ref @ n_floor_v)) > perp_dot_max:
-                n_ref = n_ref - n_floor_v * (n_ref @ n_floor_v)
-                n_ref = n_ref / (np.linalg.norm(n_ref) + 1e-12)
-            d_ref = -float(n_ref @ mu)
-
-            wall_local_planes.append({"normal_world": n_ref.astype(np.float64), "offset_world": float(d_ref)})
-            wall_local_pts_world.append(Xrin.astype(np.float32))
-
-        if wall_local_pts_world:
-            Wglob = np.concatenate(wall_local_pts_world, axis=0)
-            keep = np.isfinite(Wglob).all(-1)
-            Wglob = Wglob[keep]
+        # PCA rect (fallback)
+        if Xin.shape[0] >= 3:
+            mu_f = Xin.mean(0)
+            X0f = Xin - mu_f
+            Cf = (X0f.T @ X0f) / max(Xin.shape[0] - 1, 1)
+            _, evf = np.linalg.eigh(Cf)
+            e1f = evf[:, 2]
+            e1f = e1f - floor_normal * (e1f @ floor_normal)
+            e1f /= (np.linalg.norm(e1f) + 1e-12)
+            e2f = np.cross(floor_normal, e1f)
+            e2f /= (np.linalg.norm(e2f) + 1e-12)
+            U = X0f @ e1f
+            V = X0f @ e2f
+            umin0, umax0 = float(U.min()), float(U.max())
+            vmin0, vmax0 = float(V.min()), float(V.max())
+            pca_rect = np.stack([
+                mu_f + umin0 * e1f + vmin0 * e2f,
+                mu_f + umax0 * e1f + vmin0 * e2f,
+                mu_f + umax0 * e1f + vmax0 * e2f,
+                mu_f + umin0 * e1f + vmax0 * e2f,
+            ], 0).astype(np.float64)
         else:
-            Wglob = np.zeros((0, 3), np.float64)
+            pca_rect = None
 
-        if Wglob.shape[0] >= 200:
-            if Wglob.shape[0] > 1_000_000:
-                idx = rng.choice(Wglob.shape[0], 1_000_000, replace=False)
-                Wglob = Wglob[idx]
+        # ---- Wall construction ----
+        cams = [im for im in rgbd_images if (im is not None and im.extrinsic_w2c is not None)]
+        mean_lookat = None
+        arc_end0 = None
+        arc_end1 = None
+        chord_mid = None
+        n_wall = None
+        d_wall = None
+        wall_corners = None
+        s_min = None
+        s_max = None
+        a1w = None
+        if len(cams) >= 2:
+            c2ws = [np.linalg.inv(im.extrinsic_w2c).astype(np.float64) for im in cams]
+            Cw = np.stack([E[:3, 3] for E in c2ws], 0)
+            Rw = np.stack([E[:3, :3] for E in c2ws], 0)
+            fwd = Rw[:, :, 2]
+            fwd /= (np.linalg.norm(fwd, axis=1, keepdims=True) + 1e-12)
 
-            scale_w = float(np.median(np.linalg.norm(Wglob, axis=1)))
-            tau_wR = max(0.006, 0.01 * scale_w)
-            best_cnt_g, best_nw_g, best_dw_g, best_inl_g = -1, None, None, None
-            it_g = 2500
-            for _ in range(it_g):
-                idx3 = rng.choice(Wglob.shape[0], 3, replace=False)
-                a, b, c = Wglob[idx3]
-                n = np.cross(b - a, c - a)
-                nn = np.linalg.norm(n)
-                if nn < 1e-9: continue
-                n /= nn
-                if abs(float(n @ n_final)) > perp_dot_max:
-                    continue
-                d = -float(n @ a)
-                dist = np.abs(Wglob @ n + d)
-                inl = dist <= tau_wR
-                cnt = int(inl.sum())
-                if cnt > best_cnt_g:
-                    best_cnt_g, best_nw_g, best_dw_g, best_inl_g = cnt, n.copy(), d, inl
+            I = np.eye(3, dtype=np.float64)
+            M = np.zeros((3, 3), dtype=np.float64)
+            b = np.zeros((3,), dtype=np.float64)
+            for i in range(len(cams)):
+                fi = fwd[i]
+                A = I - np.outer(fi, fi)
+                M += A
+                b += A @ Cw[i]
+            try:
+                mean_lookat = np.linalg.solve(M, b)
+            except np.linalg.LinAlgError:
+                mean_lookat = Cw.mean(0)
 
-            if best_nw_g is None:
-                muw = Wglob.mean(0)
-                Y = Wglob - muw
-                U, S, Vt = np.linalg.svd(Y, full_matrices=False)
-                n_wall = Vt[-1]
-                n_wall = n_wall - n_final * (n_wall @ n_final)
-                n_wall = n_wall / (np.linalg.norm(n_wall) + 1e-12)
-                d_wall = -float(n_wall @ muw)
-                inl_w = np.abs(Wglob @ n_wall + d_wall) <= tau_wR
+            arc_end0 = Cw[0]
+            arc_end1 = Cw[-1]
+            chord = arc_end1 - arc_end0
+            clen = np.linalg.norm(chord)
+            if clen < 1e-9:
+                t_hat = np.cross(floor_normal, np.array([1.0, 0.0, 0.0]))
+                if np.linalg.norm(t_hat) < 1e-6:
+                    t_hat = np.cross(floor_normal, np.array([0.0, 1.0, 0.0]))
+                t_hat /= (np.linalg.norm(t_hat) + 1e-12)
             else:
-                Win = Wglob[best_inl_g]
-                muw = Win.mean(0)
-                Y = Win - muw
-                U, S, Vt = np.linalg.svd(Y, full_matrices=False)
-                n_wall = Vt[-1]
-                if abs(float(n_wall @ n_final)) > perp_dot_max:
-                    n_wall = n_wall - n_final * (n_wall @ n_final)
-                    n_wall = n_wall / (np.linalg.norm(n_wall) + 1e-12)
-                d_wall = -float(n_wall @ muw)
-                inl_w = np.abs(Wglob @ n_wall + d_wall) <= tau_wR
-        else:
-            n_wall, d_wall, inl_w = None, None, None
+                t_hat = chord / clen
 
-        out_path_ply = None
-        if export:
-            import math, cv2, open3d as o3d
+            n_up = floor_normal / (np.linalg.norm(floor_normal) + 1e-12)
+            s_look = float(np.dot(n_up, mean_lookat) + floor_offset)
+            if s_look < 0.0: n_up = -n_up
 
-            plane_color = np.array([255, 0, 255], np.float32)
-            wall_color = np.array([64, 128, 255], np.float32)
-            tiles = []
-            for k, img in enumerate(rgbd_images):
-                if img is None or img.rgb is None: continue
-                H, W = img.rgb.shape[:2]
-                base = overlays[k].astype(np.float32)
+            chord_mid = 0.5 * (arc_end0 + arc_end1)
+            v_to_look = mean_lookat - chord_mid
+            v_norm = np.linalg.norm(v_to_look)
+            if v_norm < 1e-9:
+                v_dir = np.cross(t_hat, n_up)
+                if np.linalg.norm(v_dir) < 1e-9: v_dir = np.array([1.0, 0.0, 0.0])
+                v_dir /= (np.linalg.norm(v_dir) + 1e-12)
+            else:
+                v_dir = v_to_look / v_norm
 
-                fx, fy = float(img.intrinsic[0, 0]), float(img.intrinsic[1, 1])
-                cx, cy = float(img.intrinsic[0, 2]), float(img.intrinsic[1, 2])
-                uu, vv = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
-                r_cam = np.stack([(uu - cx) / fx, (vv - cy) / fy, np.ones_like(uu)], axis=-1)
-                c2w = np.linalg.inv(img.extrinsic_w2c)
-                R = c2w[:3, :3]
-                Cw = c2w[:3, 3]
-                d_world = r_cam @ R.T
+            wall_back_offset_m = float(wall_overshoot_m)
+            anchor_pre = chord_mid - wall_back_offset_m * v_dir
+            h_anchor = float(np.dot(floor_normal, anchor_pre) + floor_offset)
+            anchor_on_floor = anchor_pre - h_anchor * floor_normal
 
-                denom = d_world[..., 0] * n_final[0] + d_world[..., 1] * n_final[1] + d_world[..., 2] * n_final[2]
-                numer = (n_final @ Cw) + d_final
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    t = -numer / denom
-                dep = img.depth.astype(np.float32)
-                dep_valid = dep[(dep > 0) & np.isfinite(dep)]
-                if dep_valid.size:
-                    near = max(0.05, float(np.quantile(dep_valid, 0.02)) * 0.8)
-                    far = float(np.quantile(dep_valid, 0.98)) * 1.25
+            a1w = t_hat / (np.linalg.norm(t_hat) + 1e-12)  # width
+            a2w = n_up  # vertical
+            n_wall_est = np.cross(a2w, a1w)
+            n_wall_est /= (np.linalg.norm(n_wall_est) + 1e-12)  # into room (horizontal)
+            d_wall_est = -float(np.dot(n_wall_est, anchor_on_floor))
+
+            def proj_to_plane(P):
+                return P - (np.dot(n_wall_est, P) + d_wall_est) * n_wall_est
+
+            P0p = proj_to_plane(arc_end0)
+            P1p = proj_to_plane(arc_end1)
+            s0 = float(np.dot(P0p - anchor_on_floor, a1w))
+            s1 = float(np.dot(P1p - anchor_on_floor, a1w))
+            s_min = min(s0, s1) - wall_pad_width_m
+            s_max = max(s0, s1) + wall_pad_width_m
+
+            wall_corners = np.stack([
+                anchor_on_floor + s_min * a1w + 0.0 * a2w,
+                anchor_on_floor + s_max * a1w + 0.0 * a2w,
+                anchor_on_floor + s_max * a1w + wall_height_m * a2w,
+                anchor_on_floor + s_min * a1w + wall_height_m * a2w,
+            ], 0).astype(np.float64)
+
+            if wall_corners.shape[0] >= 3:
+                nw = np.cross(wall_corners[1] - wall_corners[0], wall_corners[3] - wall_corners[0])
+                if np.linalg.norm(nw) > 1e-12:
+                    nw = nw / np.linalg.norm(nw)
+                    n_wall = nw.astype(np.float64)
+                    d_wall = float(-nw @ wall_corners[0])
                 else:
-                    near, far = 0.05, 6.0
-                vis_floor = np.isfinite(t) & (np.abs(denom) > 1e-8) & (t > near) & (t < far)
-                for c in range(3):
-                    ch = base[..., c]
-                    ch[vis_floor] = plane_color[c] * 0.45 + ch[vis_floor] * 0.55
-                    base[..., c] = ch
+                    n_wall = n_wall_est
+                    d_wall = d_wall_est
+            else:
+                n_wall = n_wall_est
+                d_wall = d_wall_est
 
-                if n_wall is not None:
-                    denom_w = d_world[..., 0] * n_wall[0] + d_world[..., 1] * n_wall[1] + d_world[..., 2] * n_wall[2]
-                    numer_w = (n_wall @ Cw) + d_wall
-                    with np.errstate(divide='ignore', invalid='ignore'):
-                        tw = -numer_w / denom_w
-                    vis_wall = np.isfinite(tw) & (np.abs(denom_w) > 1e-8) & (tw > near) & (tw < far)
-                    for c in range(3):
-                        ch = base[..., c]
-                        ch[vis_wall] = wall_color[c] * 0.45 + ch[vis_wall] * 0.55
-                        base[..., c] = ch
+            if mean_lookat is not None:
+                v_ref = mean_lookat - anchor_on_floor
+                v_ref = v_ref - n_up * (v_ref @ n_up)
+                if np.dot(n_wall, v_ref) < 0:
+                    n_wall = -n_wall
 
-                tiles.append(base.clip(0, 255).astype(np.uint8))
+        # ---- Floor rectangle: share bottom [w0,w1], same width; depth scaled by floor_depth_scale ----
+        floor_corners = None
+        if Xin.shape[0] >= 3:
+            if wall_corners is not None and a1w is not None and s_min is not None and s_max is not None:
+                w0 = wall_corners[0]  # left-bottom
+                w1 = wall_corners[1]  # right-bottom
+                e_t = w1 - w0
+                Lw = float(np.linalg.norm(e_t))
+                if Lw < 1e-12:
+                    floor_corners = pca_rect
+                else:
+                    e_t /= Lw
+                    e_n = (n_wall if n_wall is not None else np.cross(floor_normal, e_t))
+                    e_n = e_n / (np.linalg.norm(e_n) + 1e-12)
+                    if mean_lookat is not None:
+                        v_ref = mean_lookat - w0
+                        v_ref = v_ref - floor_normal * (v_ref @ floor_normal)
+                        if np.dot(e_n, v_ref) < 0: e_n = -e_n
 
-            if tiles:
-                cols = int(math.ceil(math.sqrt(len(tiles))))
-                rows = int(math.ceil(len(tiles) / cols))
-                th = max(im.shape[0] for im in tiles)
-                tw = max(im.shape[1] for im in tiles)
-                pad = 8
-                grid = np.full((rows * th + pad * (rows - 1), cols * tw + pad * (cols - 1), 3), 0, np.uint8)
-                for i, im in enumerate(tiles):
-                    if im.shape[:2] != (th, tw):
-                        im = cv2.resize(im, (tw, th), interpolation=cv2.INTER_LINEAR)
-                    r, c = divmod(i, cols)
-                    y0, x0 = r * (th + pad), c * (tw + pad)
-                    grid[y0:y0 + th, x0:x0 + tw] = im
-                png_path = Path(export_path if export_path is not None else "floor_seg_and_plane_grid.png")
-                cv2.imwrite(str(png_path), cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
-                log(f'[RGBDImage::estimate_floor] PNG saved to to {png_path.parent.name}/{png_path.name}]')
+                    V_all = (Xin - w0) @ e_n
+                    V_pos = V_all[V_all > 0]
+                    if V_pos.size >= 10:
+                        vmax = float(np.percentile(V_pos, 90))
+                    elif V_pos.size > 0:
+                        vmax = float(np.max(V_pos))
+                    else:
+                        if pca_rect is not None:
+                            v_candidates = (pca_rect - w0) @ e_n
+                            vmax = float(np.max(v_candidates) - np.min(v_candidates))
+                        else:
+                            vmax = 0.3 * max(1.0, scale)
 
+                    vmax = float(max(vmax, 0.1 * max(1.0, scale)))
+                    # --- Apply user scale to increase depth ---
+                    vmax *= float(max(floor_depth_scale, 0.0))
+
+                    c00 = w0
+                    c10 = w1
+                    c11 = w1 + vmax * e_n
+                    c01 = w0 + vmax * e_n
+                    floor_corners = np.stack([c00, c10, c11, c01], 0).astype(np.float64)
+            else:
+                floor_corners = pca_rect
+
+            if floor_corners is not None and floor_corners.shape[0] >= 3:
+                nf = np.cross(floor_corners[1] - floor_corners[0], floor_corners[3] - floor_corners[0])
+                if np.linalg.norm(nf) > 1e-12:
+                    nf = nf / np.linalg.norm(nf)
+                    floor_normal = nf.astype(np.float64)
+                    floor_offset = float(-nf @ floor_corners[0])
+
+        if export:
+            import cv2, open3d as o3d
+            from pathlib import Path as _Path
+            base = _Path(str(export_path if export_path is not None else 'floor_wall_debug'))
+            base.parent.mkdir(parents=True, exist_ok=True)
+
+            def _project_points(K: np.ndarray, w2c: np.ndarray, Xw: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+                Xw = np.asarray(Xw, dtype=np.float64)
+                Rt = w2c[:3, :3]
+                t = w2c[:3, 3]
+                Xc = (Rt @ Xw.T).T + t
+                z = Xc[:, 2]
+                valid = z > 1e-6
+                uv = np.empty((Xc.shape[0], 2), dtype=np.float64)
+                uv[:, 0] = (K[0, 0] * (Xc[:, 0] / np.maximum(z, 1e-6))) + K[0, 2]
+                uv[:, 1] = (K[1, 1] * (Xc[:, 1] / np.maximum(z, 1e-6))) + K[1, 2]
+                return uv, valid
+
+            Xin_loc = X[inliers]
+            if Xin_loc.shape[0] >= 3:
+                mu_f = Xin_loc.mean(0)
+                X0 = Xin_loc - mu_f
+                C = (X0.T @ X0) / max(Xin_loc.shape[0] - 1, 1)
+                _, ev = np.linalg.eigh(C)
+                e1 = ev[:, 2]
+                e1 = e1 - floor_normal * (e1 @ floor_normal)
+                e1 /= (np.linalg.norm(e1) + 1e-12)
+                e2 = np.cross(floor_normal, e1)
+                e2 /= (np.linalg.norm(e2) + 1e-12)
+                U = X0 @ e1
+                V = X0 @ e2
+                umin, umax = U.min(), U.max()
+                vmin, vmax = V.min(), V.max()
+                Nu, Nv = 10, 8
+                u_line = np.linspace(umin, umax, Nu)
+                v_line = np.linspace(vmin, vmax, Nv)
+            else:
+                u_line = np.linspace(-scale, scale, 10)
+                v_line = np.linspace(-scale, scale, 8)
+                mu_f = -floor_normal * floor_offset
+                e1 = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+                e1 = e1 - floor_normal * (e1 @ floor_normal)
+                e1 /= (np.linalg.norm(e1) + 1e-12)
+                e2 = np.cross(floor_normal, e1)
+                e2 /= (np.linalg.norm(e2) + 1e-12)
+
+            for vi, (ov, K, w2c, rgb) in enumerate(zip(overlays, K_cache, w2c_cache, rgb_cache)):
+                if ov is None or K is None or w2c is None or rgb is None: continue
+                H, W = ov.shape[:2]
+                canvas_bgr = cv2.cvtColor(ov, cv2.COLOR_RGB2BGR)
+
+                def plane_uv_to_xyz(u, v):
+                    return mu_f + u * e1 + v * e2
+
+                Nsamp = 64
+                v_samp = np.linspace(v_line.min(), v_line.max(), Nsamp)
+                u_samp = np.linspace(u_line.min(), u_line.max(), Nsamp)
+
+                for u in u_line:
+                    X_line = np.stack([plane_uv_to_xyz(u, vv) for vv in v_samp], axis=0)
+                    uv, valid = _project_points(K, w2c, X_line)
+                    uv = uv[valid]
+                    if uv.shape[0] >= 2:
+                        pts = np.round(uv).astype(np.int32)
+                        inside = (pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)
+                        pts = pts[inside]
+                        if pts.shape[0] >= 2:
+                            cv2.polylines(canvas_bgr, [pts.reshape(-1, 1, 2)], False, (255, 255, 0), 1, cv2.LINE_AA)
+
+                for v in v_line:
+                    X_line = np.stack([plane_uv_to_xyz(uu, v) for uu in u_samp], axis=0)
+                    uv, valid = _project_points(K, w2c, X_line)
+                    uv = uv[valid]
+                    if uv.shape[0] >= 2:
+                        pts = np.round(uv).astype(np.int32)
+                        inside = (pts[:, 0] >= 0) & (pts[:, 0] < W) & (pts[:, 1] >= 0) & (pts[:, 1] < H)
+                        pts = pts[inside]
+                        if pts.shape[0] >= 2:
+                            cv2.polylines(canvas_bgr, [pts.reshape(-1, 1, 2)], False, (255, 255, 0), 1, cv2.LINE_AA)
+
+                png_path = base.with_name(f"{base.stem}_overlay_view{vi:02d}.png")
+                cv2.imwrite(str(png_path), canvas_bgr)
+
+            import open3d as o3d
+            pts_all, cols_all = [], []
             ref_idx = next((i for i, im in enumerate(rgbd_images) if im is not None and im.depth is not None), None)
             if ref_idx is not None:
                 ref_img = rgbd_images[ref_idx]
                 ref_pcd = ref_img.unproject().open3d
                 pts_ref = np.asarray(ref_pcd.points, dtype=np.float64)
                 cols_ref = np.asarray(ref_pcd.colors, dtype=np.float64)
-                if pts_ref.size == 0:
-                    pts_ref = np.zeros((0, 3), np.float64)
-                    cols_ref = np.zeros((0, 3), np.float64)
+                if pts_ref.size:
+                    pts_all.append(pts_ref)
+                    cols_all.append(cols_ref)
 
-                Xin = X[inliers]
-                if Xin.shape[0] >= 4:
-                    mu = Xin.mean(0)
-                    X0 = Xin - mu
-                    C2f = (X0[:, :, None] @ X0[:, None, :]).mean(0)
-                    _, V2f = np.linalg.eigh(C2f)
-                    a1f = V2f[:, 2]
-                    a1f = a1f - n_final * (a1f @ n_final)
-                    a1f /= (np.linalg.norm(a1f) + 1e-12)
-                    a2f = np.cross(n_final, a1f)
-                    a2f /= (np.linalg.norm(a2f) + 1e-12)
-                    Qf = np.stack([(Xin - mu) @ a1f, (Xin - mu) @ a2f], 1)
-                    qmin, qmax = Qf.min(0), Qf.max(0)
-                    u = np.linspace(qmin[0], qmax[0], 220)
-                    v = np.linspace(qmin[1], qmax[1], 220)
-                    Uv, Vv = np.meshgrid(u, v)
-                    plane_pts = (mu[None, None, :] + Uv[..., None] * a1f[None, None, :] + Vv[..., None] * a2f[None, None, :]).reshape(-1, 3)
+            def sample_sphere_points(center, radius, n_pts):
+                phi = (1.0 + 5 ** 0.5) / 2.0
+                i = np.arange(n_pts, dtype=np.float64)
+                z = 1.0 - 2.0 * (i + 0.5) / n_pts
+                theta = 2.0 * np.pi * i / phi
+                rxy = np.sqrt(np.maximum(1.0 - z * z, 0.0))
+                unit = np.stack([rxy * np.cos(theta), rxy * np.sin(theta), z], axis=1)
+                return center[None, :] + radius * unit
+
+            if floor_corners is not None and floor_corners.shape[0] >= 3:
+                r_small = max(0.02 * scale, 0.02)
+                n_per = 256
+                pink = np.array([[1.0, 0.2, 0.8]], dtype=np.float64)
+                for c in floor_corners:
+                    sp = sample_sphere_points(c, r_small, n_per)
+                    pts_all.append(sp)
+                    cols_all.append(np.repeat(pink, sp.shape[0], axis=0))
+
+            if wall_corners is not None:
+                r_small = max(0.02 * scale, 0.02)
+                n_per = 256
+                green = np.array([[0.0, 1.0, 0.0]], dtype=np.float64)
+                for c in wall_corners:
+                    sp = sample_sphere_points(c, r_small, n_per)
+                    pts_all.append(sp)
+                    cols_all.append(np.repeat(green, sp.shape[0], axis=0))
+
+            def sample_quad(corners: np.ndarray, nu: int, nv: int):
+                corners = np.asarray(corners, dtype=np.float64)
+                if corners.shape[0] == 3:
+                    p0, p1, p2 = corners
+                    us = np.linspace(0.0, 1.0, nu)
+                    vs = np.linspace(0.0, 1.0, nv)
+                    P = []
+                    for u in us:
+                        vmax = 1.0 - u
+                        vv = np.linspace(0.0, vmax, nv)
+                        A = (1 - u - vv)[:, None] * p0[None, :] + u * p1[None, :] + vv[:, None] * p2[None, :]
+                        P.append(A)
+                    return np.vstack(P) if P else np.zeros((0, 3), dtype=np.float64)
                 else:
-                    x0 = -d_final * n_final
-                    a = np.array([1.0, 0.0, 0.0]) if abs(n_final[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-                    e1 = np.cross(n_final, a)
-                    e1 /= (np.linalg.norm(e1) + 1e-12)
-                    e2 = np.cross(n_final, e1)
-                    s = max(scale, 1.0)
-                    u = np.linspace(-s, s, 220)
-                    v = np.linspace(-s, s, 220)
-                    Uv, Vv = np.meshgrid(u, v)
-                    plane_pts = (x0[None, None, :] + Uv[..., None] * e1[None, None, :] + Vv[..., None] * e2[None, None, :]).reshape(-1, 3)
-                plane_cols = np.tile(np.array([[1.0, 0.0, 1.0]], dtype=np.float64), (plane_pts.shape[0], 1))
+                    p0, p1, p2, p3 = corners[:4]
+                    us = np.linspace(0.0, 1.0, nu)
+                    vs = np.linspace(0.0, 1.0, nv)
+                    uu, vv = np.meshgrid(us, vs)
+                    P = ((1 - uu) * (1 - vv))[:, :, None] * p0 + (uu * (1 - vv))[:, :, None] * p1 + \
+                        (uu * vv)[:, :, None] * p2 + ((1 - uu) * vv)[:, :, None] * p3
+                    return P.reshape(-1, 3)
 
-                wall_pts = np.zeros((0, 3), np.float64)
-                wall_cols = np.zeros((0, 3), np.float64)
-                if n_wall is not None:
-                    Win = Wglob[inl_w] if inl_w is not None and np.any(inl_w) else Wglob
-                    if Win.shape[0] >= 4:
-                        muw = Win.mean(0)
-                        Y = Win - muw
-                        Cw = (Y[:, :, None] @ Y[:, None, :]).mean(0)
-                        _, Vw = np.linalg.eigh(Cw)
-                        a1w = Vw[:, 2]
-                        a1w = a1w - n_wall * (a1w @ n_wall)
-                        a1w /= (np.linalg.norm(a1w) + 1e-12)
-                        a2w = np.cross(n_wall, a1w)
-                        a2w /= (np.linalg.norm(a2w) + 1e-12)
-                        Qw = np.stack([(Win - muw) @ a1w, (Win - muw) @ a2w], 1)
-                        qmin, qmax = Qw.min(0), Qw.max(0)
-                        u = np.linspace(qmin[0], qmax[0], 180)
-                        v = np.linspace(qmin[1], qmax[1], 180)
-                        U2, V2 = np.meshgrid(u, v)
-                        wall_pts = (muw[None, None, :] + U2[..., None] * a1w[None, None, :] + V2[..., None] * a2w[None, None, :]).reshape(-1, 3)
-                    else:
-                        x0w = -d_wall * n_wall
-                        a0 = np.array([1.0, 0.0, 0.0])
-                        a1w = a0 - n_wall * (a0 @ n_wall)
-                        if np.linalg.norm(a1w) < 1e-6: a1w = np.array([0.0, 1.0, 0.0])
-                        a1w /= (np.linalg.norm(a1w) + 1e-12)
-                        a2w = np.cross(n_wall, a1w)
-                        a2w /= (np.linalg.norm(a2w) + 1e-12)
-                        s = max(scale, 1.0)
-                        u = np.linspace(-s, s, 160)
-                        v = np.linspace(-s, s, 160)
-                        U2, V2 = np.meshgrid(u, v)
-                        wall_pts = (x0w[None, None, :] + U2[..., None] * a1w[None, None, :] + V2[..., None] * a2w[None, None, :]).reshape(-1, 3)
-                    wall_cols = np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float64), (wall_pts.shape[0], 1))
+            if floor_corners is not None and floor_corners.shape[0] >= 3:
+                Pf = sample_quad(floor_corners, 200, 200)
+                if Pf.size:
+                    pts_all.append(Pf)
+                    cols_all.append(np.tile(np.array([[1.0, 0.2, 0.8]], dtype=np.float64), (Pf.shape[0], 1)))
 
-                pts_all = np.vstack([pts_ref, plane_pts, wall_pts])
-                cols_all = np.vstack([cols_ref, plane_cols, wall_cols])
-                pcd_all = o3d.geometry.PointCloud()
-                pcd_all.points = o3d.utility.Vector3dVector(pts_all)
-                pcd_all.colors = o3d.utility.Vector3dVector(cols_all)
-                ply_path = str(Path(export_path if export_path is not None else 'floor_wall_cloud.png').with_suffix('.ply'))
-                if o3d.io.write_point_cloud(ply_path, pcd_all):
-                    out_path_ply = Path(ply_path)
-                    log(f'[RGBDImage::estimate_floor] PLY saved to to {out_path_ply.parent.name}/{out_path_ply.name}]')
+            if wall_corners is not None and wall_corners.shape[0] >= 3:
+                Pw = sample_quad(wall_corners, 160, 160)
+                if Pw.size:
+                    pts_all.append(Pw)
+                    cols_all.append(np.tile(np.array([[0.0, 1.0, 0.0]], dtype=np.float64), (Pw.shape[0], 1)))
+
+            pts_all = np.vstack(pts_all) if pts_all else np.zeros((0, 3), dtype=np.float64)
+            cols_all = np.vstack(cols_all) if cols_all else np.zeros((0, 3), dtype=np.float64)
+            pcd_all = o3d.geometry.PointCloud()
+            pcd_all.points = o3d.utility.Vector3dVector(pts_all)
+            pcd_all.colors = o3d.utility.Vector3dVector(cols_all)
+            ply_path = base.with_suffix('.ply')
+            o3d.io.write_point_cloud(ply_path, pcd_all)
 
         return {
-            "floor_normal": n_final.astype(np.float64),
-            "floor_offset": float(d_final),
-            "wall_normal": None if 'n_wall' not in locals() or n_wall is None else n_wall.astype(np.float64),
-            "wall_offset": None if 'd_wall' not in locals() or d_wall is None else float(d_wall),
-        }
-
-    @staticmethod
-    def estimate_floor2(
-            *rgbd_images: "RGBDImage",
-            export: bool = True,
-            export_path: Optional[Union[Path, str]] = None,
-            rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None,
-    ):
-        from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
-
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        dtype = torch.float16 if device.type == "cuda" else torch.float32
-        model_name = "nvidia/segformer-b4-finetuned-ade-512-512"
-        processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
-        model = AutoModelForSemanticSegmentation.from_pretrained(model_name, dtype=dtype).to(device).eval()
-        id2label = {int(k): v for k, v in model.config.id2label.items()}
-        floor_ids = [k for k, v in id2label.items() if any(t in v.lower() for t in ("floor", "ground", "road", "sidewalk", "pavement"))] or [0]
-
-        def rot_cv(img, how):
-            if how is None: return img
-            code = {'90_CLOCKWISE': cv2.ROTATE_90_CLOCKWISE,
-                    '90_COUNTERCLOCKWISE': cv2.ROTATE_90_COUNTERCLOCKWISE,
-                    '180': cv2.ROTATE_180}[how]
-            return cv2.rotate(img, code)
-
-        def inv_rot(how):
-            if how is None: return None
-            return {'90_CLOCKWISE': '90_COUNTERCLOCKWISE',
-                    '90_COUNTERCLOCKWISE': '90_CLOCKWISE',
-                    '180': '180'}[how]
-
-        all_pts, all_w = [], []
-        per_view_valid = []
-        overlays, originals = [], []
-        inv_rotate = inv_rot(rotate)
-
-        for img in rgbd_images:
-            if img is None or img.rgb is None or img.depth is None:
-                per_view_valid.append(False)
-                overlays.append(None)
-                originals.append(None)
-                continue
-            per_view_valid.append(True)
-
-            rgb = img.rgb if img.rgb.dtype == np.uint8 else np.clip(img.rgb, 0, 255).astype(np.uint8)
-            rgb_in = rot_cv(rgb, rotate)
-
-            with torch.inference_mode():
-                inputs = processor(images=rgb_in, return_tensors="pt")
-                inputs = {k: v.to(device, dtype=model.dtype) for k, v in inputs.items()}
-                logits = model(**inputs).logits
-                logits = torch.nn.functional.interpolate(
-                    logits, size=rgb_in.shape[:2], mode="bilinear", align_corners=False
-                )[0]
-                prob_in = logits.softmax(dim=0)[floor_ids].sum(dim=0).float().cpu().numpy()
-
-            # --- gate to bottom band ---
-            H_in, W_in = prob_in.shape
-            bottom_band_ratio = 0.50  # bottom %
-            yy_in = np.arange(H_in, dtype=np.float32)[:, None]
-            bottom_mask_in = (yy_in >= (1.0 - bottom_band_ratio) * (H_in - 1)).astype(np.float32)
-            prob_in *= bottom_mask_in
-
-            # rotate probabilities back to original image orientation
-            prob = rot_cv(prob_in, inv_rotate).astype(np.float32)
-            mask0 = (prob >= 0.5)
-            if np.any(mask0):
-                num, lab = cv2.connectedComponents(mask0.astype(np.uint8))
-                if num > 1:
-                    areas = [(lab == i).sum() for i in range(1, num)]
-                    keep = 1 + int(np.argmax(areas))
-                    mask = (lab == keep)
-                else:
-                    mask = mask0
-            else:
-                mask = np.zeros_like(mask0, bool)
-
-            valid = np.isfinite(img.depth) & (img.depth > 0) & np.isfinite(img.points_world).all(-1)
-            pick = mask & valid
-            if np.count_nonzero(pick) >= 50:
-                X = img.points_world[pick].astype(np.float64)
-                w = (prob[pick].astype(np.float64) + 1e-3)
-                all_pts.append(X.astype(np.float32))
-                all_w.append(w.astype(np.float32))
-
-            originals.append(rgb)
-            if export:
-                base = rgb.astype(np.float32)
-                orange = np.array([255, 165, 0], np.float32)
-                for c in range(3):
-                    ch = base[..., c]
-                    ch[mask] = orange[c] * 0.35 + ch[mask] * 0.65
-                    base[..., c] = ch
-                overlays.append(base.clip(0, 255).astype(np.uint8))
-            else:
-                overlays.append(None)
-
-        if not all_pts:
-            return {"floor_normal": np.array([0, 0, 1], np.float64), "floor_offset": 0.0, "wall_normal": None, "wall_offset": None}
-
-        X = np.concatenate(all_pts, 0).reshape(-1, 3).astype(np.float64)
-        w = np.concatenate(all_w, 0).reshape(-1).astype(np.float64)
-        w = np.maximum(w, 1e-8)
-        w /= (w.sum() + 1e-12)
-        mu = (w[:, None] * X).sum(0)
-        Xc = X - mu
-        C = (w[:, None, None] * (Xc[:, :, None] @ Xc[:, None, :])).sum(0)
-        _, V = np.linalg.eigh(C)
-        n = V[:, 0]
-        d = -float(n @ mu)
-        for _ in range(5):
-            sd = X @ n + d
-            s = 1.4826 * (np.median(np.abs(sd)) + 1e-9)
-            rw = 1.0 / (1.0 + (sd / (2.0 * s)) ** 2)
-            ww = (w * rw)
-            ww /= (ww.sum() + 1e-12)
-            mu = (ww[:, None] * X).sum(0)
-            Xc = X - mu
-            C = (ww[:, None, None] * (Xc[:, :, None] @ Xc[:, None, :])).sum(0)
-            _, V = np.linalg.eigh(C)
-            n = V[:, 0]
-            d = -float(n @ mu)
-        sd = X @ n + d
-        if np.median(sd) < 0: n, d = -n, -d
-        n_final = n.astype(np.float64)
-        d_final = float(d)
-
-        mids = [i for i, b in enumerate(per_view_valid) if b]
-        mid_idx = mids[len(mids) // 2]
-        c2w = np.linalg.inv(rgbd_images[mid_idx].extrinsic_w2c).astype(np.float64)
-        Cmid = c2w[:3, 3]
-        fwd = c2w[:3, :3][:, 2]
-        fwd = fwd - n_final * (fwd @ n_final)
-        if np.linalg.norm(fwd) < 1e-9:
-            a = np.array([1.0, 0.0, 0.0])
-            fwd = a - n_final * (a @ n_final)
-        fwd /= (np.linalg.norm(fwd) + 1e-12)
-        n_wall = fwd.astype(np.float64)
-        d_wall = -float(n_wall @ (Cmid + 5.0 * n_wall))
-
-        if export and export_path is not None:
-            # ---- PLY ----
-            pts_all, cols_all = [], []
-            for img in rgbd_images:
-                if img is None or img.depth is None: continue
-                pcd = img.unproject().open3d
-                if len(pcd.points) > 0:
-                    pts_all.append(np.asarray(pcd.points))
-                    cols_all.append(np.asarray(pcd.colors))
-            if pts_all:
-                P = np.concatenate(pts_all, 0)
-                Cc = np.concatenate(cols_all, 0)
-            else:
-                P = np.zeros((0, 3), np.float64)
-                Cc = np.zeros((0, 3), np.float64)
-
-            Xproj = X - (X @ n_final + d_final)[:, None] * n_final[None]
-            muF = Xproj.mean(0)
-            U, Sv, Vt = np.linalg.svd((Xproj - muF)[::max(1, len(Xproj) // 5000)], full_matrices=False)
-            e1 = Vt[0]
-            e1 -= n_final * (e1 @ n_final)
-            e1 /= (np.linalg.norm(e1) + 1e-12)
-            e2 = np.cross(n_final, e1)
-            e2 /= (np.linalg.norm(e2) + 1e-12)
-            Q = np.stack([(Xproj - muF) @ e1, (Xproj - muF) @ e2], 1)
-            qmin, qmax = Q.min(0), Q.max(0)
-            u = np.linspace(qmin[0], qmax[0], 200)
-            v = np.linspace(qmin[1], qmax[1], 200)
-            Uv, Vv = np.meshgrid(u, v)
-            Fpts = (muF[None, None, :] + Uv[..., None] * e1[None, None, :] + Vv[..., None] * e2[None, None, :]).reshape(-1, 3)
-            Fcols = np.tile(np.array([[1.0, 0.0, 1.0]]), (Fpts.shape[0], 1))
-
-            w_e1 = e1 - n_wall * (e1 @ n_wall)
-            if np.linalg.norm(w_e1) < 1e-9: w_e1 = e2
-            w_e1 /= (np.linalg.norm(w_e1) + 1e-12)
-            w_e2 = np.cross(n_wall, w_e1)
-            w_e2 /= (np.linalg.norm(w_e2) + 1e-12)
-            Wcenter = Cmid + 5.0 * n_wall
-            u = np.linspace(qmin[0], qmax[0], 180)
-            v = np.linspace(-0.5 * (qmax[1] - qmin[1]), 0.5 * (qmax[1] - qmin[1]), 180)
-            U2, V2 = np.meshgrid(u, v)
-            Wpts = (Wcenter[None, None, :] + U2[..., None] * w_e1[None, None, :] + V2[..., None] * w_e2[None, None, :]).reshape(-1, 3)
-            Wcols = np.tile(np.array([[0.0, 1.0, 0.0]]), (Wpts.shape[0], 1))
-
-            pcd = o3d.geometry.PointCloud()
-            if P.size:
-                pcd.points = o3d.utility.Vector3dVector(np.vstack([P, Fpts, Wpts]))
-                pcd.colors = o3d.utility.Vector3dVector(np.vstack([Cc, Fcols, Wcols]))
-            else:
-                pcd.points = o3d.utility.Vector3dVector(np.vstack([Fpts, Wpts]))
-                pcd.colors = o3d.utility.Vector3dVector(np.vstack([Fcols, Wcols]))
-
-            ply_path = Path(export_path).with_suffix('.ply') if isinstance(export_path, (str, Path)) else Path("floor_wall_debug.ply")
-            o3d.io.write_point_cloud(str(ply_path), pcd)
-            log(f'[RGBDImage::estimate_floor] PLY saved to to {ply_path.parent.name}/{ply_path.name}]')
-
-            # ---- PNG GRID (row1: originals, row2: overlays) ----
-            imgs_orig = [im for im, v in zip(originals, per_view_valid) if v and im is not None]
-            imgs_over = [ov for ov, v in zip(overlays, per_view_valid) if v and ov is not None]
-            if imgs_orig and imgs_over and len(imgs_orig) == len(imgs_over):
-                th = max(im.shape[0] for im in imgs_orig)
-                tw = max(im.shape[1] for im in imgs_orig)
-
-                def fit(im):
-                    h, w = im.shape[:2]
-                    s = min(tw / w, th / h)
-                    nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
-                    out = cv2.resize(im, (nw, nh), interpolation=cv2.INTER_LINEAR)
-                    tile = np.zeros((th, tw, 3), np.uint8)
-                    y0, x0 = (th - nh) // 2, (tw - nw) // 2
-                    tile[y0:y0 + nh, x0:x0 + nw] = out
-                    return tile
-
-                row1 = [fit(im) for im in imgs_orig]
-                row2 = [fit(im) for im in imgs_over]
-                cols = len(row1)
-                pad = 8
-                grid_h = 2 * th + pad
-                grid_w = cols * tw + (cols - 1) * pad
-                grid = np.zeros((grid_h, grid_w, 3), np.uint8)
-                for j in range(cols):
-                    x = j * (tw + pad)
-                    grid[0:th, x:x + tw] = row1[j]
-                    grid[th + pad:th + pad + th, x:x + tw] = row2[j]
-                png_path = ply_path.with_suffix('.png')
-                cv2.imwrite(str(png_path), cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
-                log(f'[RGBDImage::estimate_floor] PNG saved to to {png_path.parent.name}/{png_path.name}]')
-
-        return {
-            "floor_normal": n_final.astype(np.float64),
-            "floor_offset": float(d_final),
-            "wall_normal": n_wall.astype(np.float64),
-            "wall_offset": float(d_wall),
+            "floor_corners_world": None if floor_corners is None else floor_corners.astype(np.float64),
+            "floor_normal": None if floor_corners is None else floor_normal.astype(np.float64),
+            "floor_offset": None if floor_corners is None else float(floor_offset),
+            "wall_corners_world": None if wall_corners is None else wall_corners.astype(np.float64),
+            "wall_normal": None if wall_corners is None else n_wall.astype(np.float64),
+            "wall_offset": None if wall_corners is None else float(d_wall),
+            "mean_lookat_world": None if mean_lookat is None else mean_lookat.astype(np.float64),
+            "arc_end0_world": None if arc_end0 is None else arc_end0.astype(np.float64),
+            "arc_end1_world": None if arc_end1 is None else arc_end1.astype(np.float64),
+            "chord_midpoint_world": None if chord_mid is None else chord_mid.astype(np.float64),
+            "wall_overshoot_m": wall_overshoot_m,
         }
 
     @classmethod
@@ -1401,7 +1292,7 @@ class RGBDImage:
             cam_idx: int,
             color_ts: int,
             depth_ts: Union[int, None],
-            depth_filter: Literal['aligned', 'bilateral_spatial', 'bilateral_temporal'] = 'bilateral_spatial'
+            depth_filter: Literal['aligned', 'bilateral_spatial', 'bilateral_temporal'] = 'aligned'
     ) -> 'RGBDImage':
         """
         Create PixelPoints from a session's camera data.
@@ -1435,7 +1326,8 @@ class RGBDImage:
         rgb_path = session_root / 'orbbec' / f'cam{cam_idx:02d}' / 'color' / f'{color_ts}.jpg'
         mask_path = session_root / 'orbbec' / f'cam{cam_idx:02d}' / 'mask' / f'{color_ts}.jpg'
         if depth_ts is not None:
-            depth_path = session_root / 'orbbec' / f'cam{cam_idx:02d}' / (f'depth_{depth_filter}' if depth_filter in ['aligned'] else f'depth_filtering_{depth_filter}') / f'{depth_ts}.png'
+            depth_path_png = session_root / 'orbbec' / f'cam{cam_idx:02d}' / (f'depth_{depth_filter}' if depth_filter in ['aligned'] else f'depth_filtering_{depth_filter}') / f'{depth_ts}.png'
+            depth_path = depth_path_png if depth_path_png.exists() else depth_path_png.with_suffix('.npy')
         else:
             depth_path = None
         # load data and create RGBDImage
@@ -1446,7 +1338,7 @@ class PixelPoints:
     O3D_VISUALIZER_CACHE = {}
     PYRENDER_RENDERER_CACHE = {}
 
-    def __init__(self, pixel_points: np.ndarray, pixel_colors: Optional[np.ndarray] = None, pixel_valid: Optional[np.ndarray] = None, pixel_features: Optional[Dict[str, np.ndarray]] = None):
+    def __init__(self, pixel_points: np.ndarray, pixel_colors: Optional[np.ndarray] = None, pixel_valid: Optional[np.ndarray] = None, pixel_features: Optional[Dict[str, np.ndarray]] = None, extrinsics_c2w: Optional[np.ndarray] = None):
         """
         Initialize pixel-wise point-clouds.
 
@@ -1467,6 +1359,7 @@ class PixelPoints:
         self.colors = pixel_colors if pixel_colors is not None else np.random.rand(*self.points.shape).astype(pixel_points.dtype)
         self.valid = np.asarray(pixel_valid, dtype=bool) if pixel_valid is not None else np.ones(self.points.shape[:-1], dtype=bool)
         self.features = pixel_features if pixel_features is not None else {}
+        self.extrinsics_c2w: Optional[np.ndarray] = extrinsics_c2w
 
     def __repr__(self) -> str:
         return f"PointCloud(points_shape={self.points.shape}, colors_shape={self.colors.shape})"
@@ -1489,8 +1382,66 @@ class PixelPoints:
             if pcd_o3d.has_normals():
                 normal_valid = np.asarray(pcd_o3d.normals).reshape(self.points.shape[:-1] + (3,))
             else:
-                pcd_o3d.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=40))
-                normal_valid = pcd_o3d.normalize_normals().normals
+                pcd_o3d.estimate_normals(o3d.geometry.KDTreeSearchParamKNN(knn=10))
+                # normal_valid = pcd_o3d.normalize_normals().normals
+
+                voxel_size = 0.0025  # tune this based on data scale
+                pcd_for_mesh = pcd_o3d.voxel_down_sample(voxel_size)
+                pcd_for_mesh.estimate_normals(
+                    o3d.geometry.KDTreeSearchParamHybrid(
+                        radius=2 * voxel_size,  # or larger
+                        max_nn=20  # larger support for smoother normals
+                    )
+                )
+                pcd_for_mesh.orient_normals_consistent_tangent_plane(k=50)
+                mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+                    pcd_for_mesh,
+                    depth=7
+                )
+                # Remove low-density garbage
+                densities = np.asarray(densities)
+                density_thresh = np.quantile(densities, 0.01)
+                mesh.remove_vertices_by_mask(densities < density_thresh)
+                # Crop to original bbox
+                bbox = pcd_o3d.get_axis_aligned_bounding_box()
+                mesh = mesh.crop(bbox)
+                # Clean mesh
+                mesh.remove_degenerate_triangles()
+                mesh.remove_duplicated_triangles()
+                mesh.remove_duplicated_vertices()
+                mesh.remove_non_manifold_edges()
+                # Simplify (coarser = smoother)
+                if len(mesh.triangles) > 200_000:
+                    mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=200_000)
+                # Stronger smoothing (geometry)
+                mesh = mesh.filter_smooth_simple(number_of_iterations=5)
+                mesh = mesh.filter_smooth_taubin(number_of_iterations=15)
+                # Recompute vertex normals after smoothing
+                mesh.compute_vertex_normals()
+                mesh_vertices = np.asarray(mesh.vertices, dtype=np.float32)
+                mesh_normals = np.asarray(mesh.vertex_normals, dtype=np.float32)
+                tree = cKDTree(mesh_vertices)
+                points_np = np.asarray(pcd_o3d.points, dtype=np.float32)
+                _, idx = tree.query(points_np, k=1, workers=-1)
+                normal_valid = mesh_normals[idx]
+
+                if self.extrinsics_c2w is not None:
+                    # camera center in world coordinates from c2w
+                    cam_center_w = self.extrinsics_c2w[:3, 3].astype(np.float32)
+
+                    # points in world coordinates, same order as normal_valid
+                    points_w = np.asarray(pcd_o3d.points, dtype=np.float32)
+
+                    # vector from point to camera (so normals will point towards camera)
+                    view_vec = cam_center_w[None, :] - points_w  # shape (N, 3)
+
+                    # dot product between normal and view direction
+                    dot = np.einsum("ij,ij->i", normal_valid, view_vec)
+
+                    # flip normals that are pointing away from the camera
+                    flip_mask = dot < 0.0
+                    normal_valid[flip_mask] *= -1.0
+
             normal_full = -np.ones_like(self.points, dtype=np.float32)
             if self.valid is not None:
                 normal_full[self.valid] = normal_valid
@@ -1507,7 +1458,7 @@ class PixelPoints:
         on the foreground mask and invalidate points that are too close to the
         silhouette, which eliminates hard edges / background spill in renders.
         """
-        # ---- Soft trim near the FG boundary (no API changes) -----------------
+        # ---- Soft trim near the FG boundary -----------------
         # If no mask exists yet, assume all pixels valid so we can create one.
         if getattr(self, "valid", None) is None:
             self.valid = np.ones(self.points.shape[:2], dtype=bool)
@@ -1614,7 +1565,7 @@ class PixelPoints:
             return self._project_pyrender(target_intrinsic, target_extrinsic, target_image_size_hw, is_c2w, point_size, use_cache, renderer, **floor_wall_kwargs)
         return self._project_open3d(target_intrinsic, target_extrinsic, target_image_size_hw, is_c2w, point_size, use_cache, renderer, **floor_wall_kwargs)
 
-    def _project_pyrender(  # method of your class
+    def _project_pyrender(
             self,
             target_intrinsic: np.ndarray,
             target_extrinsic: np.ndarray,
@@ -1730,7 +1681,7 @@ class PixelPoints:
             n /= (np.linalg.norm(n) + 1e-12)
             d = float(d)
             # in-plane basis
-            a = np.array([1.0, 0.0, 0.0], np.float64) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0], np.float64)
+            a = np.array([1.0, 0.0, 0.0], dtype=np.float64) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0], dtype=np.float64)
             u = np.cross(n, a)
             u /= (np.linalg.norm(u) + 1e-12)
             v = np.cross(n, u)
@@ -1751,7 +1702,7 @@ class PixelPoints:
             ok = np.isfinite(t) & (np.abs(denom) > 1e-9) & (t > 0.05) & (t < 1000.0)
             if np.count_nonzero(ok) < 4:
                 s = 3.0
-                corners = np.array([[-s, -s], [s, -s], [s, s], [-s, s]], np.float64)
+                corners = np.array([[-s, -s], [s, -s], [s, s], [-s, s]], dtype=np.float64)
                 verts = x0[None, :] + corners[:, 0:1] * u[None, :] + corners[:, 1:2] * v[None, :]
             else:
                 Pw = (Cw[None, None, :] + t[..., None] * dir_world).reshape(-1, 3)[ok.reshape(-1)]
@@ -1780,7 +1731,7 @@ class PixelPoints:
             mesh.compute_vertex_normals()
 
             # material
-            if texture_path is not None and Path(texture_path).exists():
+            if texture_path is not None:
                 mat = o3d.visualization.rendering.MaterialRecord()
                 mat.shader = "defaultLit"
                 try:
@@ -1795,7 +1746,8 @@ class PixelPoints:
                     mesh.textures = [tex]
                     mat.albedo_img = tex
                     mat.base_color = (1.0, 1.0, 1.0, 1.0)
-                except Exception:
+                except Exception as e:
+                    log(f'[PixelPoints::_project_open3d::make_plane_mesh] Exception: {e}', 'error')
                     mat.shader = "defaultUnlit"
                     col = (np.array(color_rgb, dtype=np.float32) / 255.0).tolist() + [1.0]
                     mat.base_color = tuple(col)
@@ -1813,7 +1765,7 @@ class PixelPoints:
                 np.asarray(floor_normal).astype(np.float64),
                 float(floor_offset),
                 color_rgb=(120, 120, 120),
-                texture_path=PathUtils.resources_path() / 'checkerboard.jpg'
+                texture_path=PathUtils.resources_path() / 'backdrops' / 'floor_dark.jpg'
             )
             renderer.scene.add_geometry('floor', floor_mesh, floor_mat)
 
@@ -2344,6 +2296,18 @@ if __name__ == '__main__':
     # pcd_lr_.save_ply('thuman_0000_000_lr.ply')
     # pcd_lr_.project(rgbd_l_.intrinsic, rgbd_l_.extrinsic_w2c, rgbd_l_.image_size_hw, use_cache=True, is_c2w=False).save_png('thuman_0000_000_lr2l.png')
     # pcd_lr_.project(rgbd_r_.intrinsic, rgbd_r_.extrinsic_w2c, rgbd_r_.image_size_hw, use_cache=True, is_c2w=False).save_png('thuman_0000_000_lr2r.png')
+
+    # Cagliari test
+    session_root_ = PathUtils.capturestudio_cache_path() / 'Captures_Cagliari_Nov_2025' / 'Cagliari_1_Perf_7'
+    calibration_session_root_ = PathUtils.capturestudio_cache_path() / 'Captures_Cagliari_Nov_2025' / 'Cagliari_1_Calib_6'
+    calibration_data_ = CalibrationData.from_session(calibration_session_root_)
+    rgbd_1_ = RGBDImage.from_session(session_root_, calibration_data_, cam_idx=1, color_ts=11512358, depth_ts=11512360, depth_filter='bilateral_temporal').resize(1280, 1024)
+    rgbd_3_ = RGBDImage.from_session(session_root_, calibration_data_, cam_idx=7, color_ts=11512338, depth_ts=11512341, depth_filter='bilateral_temporal').resize(1280, 1024)
+    pcd_1_ = PixelPoints.from_rgbd_image(rgbd_1_)
+    pcd_3_ = PixelPoints.from_rgbd_image(rgbd_3_)
+    pcd_all_ = PixelPoints.from_partials(pcd_1_, pcd_3_)
+    pcd_all_.save_ply('cagliari_all.ply')
+    exit(0)
 
     # rotate test (Brasov)
     session_root_ = PathUtils.capturestudio_cache_path() / 'Captures_Apr_May_2025' / 'Thanos_2_Perf_1'

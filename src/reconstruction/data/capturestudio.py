@@ -12,6 +12,7 @@ from reconstruction.primitive.stereo import StereoUtils
 from utils.flow import FlowUtils
 from utils.misc import log, PathUtils
 
+
 class SingleSessionDataset(Dataset):
     """
     Dataset for a single session (ALL cameras in a session).
@@ -88,7 +89,7 @@ class SingleSessionDataset(Dataset):
         for cam_idx_rel, (cam_idx_global, rgb_path, depth_path) in enumerate(zip(self.cam_indices, rgb_file_paths, depth_file_paths)):
             rgb_image = cv2.cvtColor(cv2.imread(str(rgb_path)), cv2.COLOR_BGR2RGB)
             mask_path = Path(str(rgb_path).replace('color', 'mask'))
-            mask_image = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
+            mask_image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
             if depth_path is not None:
                 depth_map = PathUtils.read_file(depth_path, png_type='depth').astype(np.float32) * 1e-3
             else:
@@ -180,8 +181,8 @@ class MultiSessionDataset(Dataset):
                  apply_intrinsics_fix: bool = False,
                  is_cam_indices_s0: bool = False,
                  return_of: bool = False,
-                 read_calibration_data_from_folder: bool = False,
                  rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None):
+        self.depth_filter = depth_filter
         self.calibration_session_name = calibration_session_name
         self.calibration_method = calibration_method
         self.session_names = session_names
@@ -225,9 +226,14 @@ class MultiSessionDataset(Dataset):
             session_path=_calibration_session_path,
             method=calibration_method
         )
-        all_calibration_data = (all_calibration_data
-                                .rotate(rotate)
-                                .resize(*target_image_size_hw, apply_intrinsics_fix=apply_intrinsics_fix))
+        if target_image_size_hw is not None and rotate is not None:
+            all_calibration_data = (all_calibration_data
+                                    .rotate(rotate)
+                                    .resize(*target_image_size_hw, apply_intrinsics_fix=apply_intrinsics_fix))
+        elif target_image_size_hw is None and rotate is not None:
+            all_calibration_data = all_calibration_data.rotate(rotate)
+        elif target_image_size_hw is not None and rotate is None:
+            all_calibration_data = all_calibration_data.resize(*target_image_size_hw, apply_intrinsics_fix=apply_intrinsics_fix)
         cam_indices_s0 = [_ - 1 for _ in list(cam_indices)]
         self.calibration_data = all_calibration_data[cam_indices_s0]
 
@@ -288,9 +294,12 @@ class MultiSessionDataset(Dataset):
             - Camera indices (torch.Tensor): Shape (N,). The indices of the cameras in the stereo pair, from 0 to (C-1), where C is the number of cameras.
             - Frame index (torch.Tensor): Shape (N,). The index of the frame in the dataset, from 0 to (T-1), where T is the total number of frames in the dataset.
         """
+        # TODO: erase me
+        if idx >= self.dataset_lengths[0]:
+            idx = self.dataset_lengths[0] - 1 # clip
         dataset_index = bisect_right(self.dataset_lengths_cum, idx)
         if not 0 <= dataset_index < len(self.training_datasets):
-            raise IndexError("Index out of range for the combined dataset.")
+            raise IndexError(f"Index out of range for the combined dataset: {dataset_index}")
         dataset = self.datasets[dataset_index]
         sample_idx = (idx - sum(self.dataset_lengths[:dataset_index])) // len(self.cam_indices_tuples)
         cam_indices = list(self.cam_indices_tuples[sample_idx % len(self.cam_indices_tuples)])
@@ -425,17 +434,65 @@ class MultiSessionDataset(Dataset):
                     cache_key_prefix=f"{self.calibration_session_name}_{self.calibration_method}".lower()
                 )
 
-    def get_camera_orbit(self, **trajectory_kwargs):
-        from reconstruction.vis.cam_orbit import InterpolatedCameraOrbit
-        return InterpolatedCameraOrbit.from_session(
-            calibration_session=self.calibration_session_name,
+    def get_camera_orbit(self, orbit_type: Literal['interpolated', 'audience'] = 'interpolated', floor_wall_data: Optional[dict] = None, **trajectory_kwargs):
+        # Estimate floor and wall
+        from reconstruction.primitive.pcd import RGBDImage
+        from reconstruction.vis.dataset_visualizer import DatasetVisualizer
+        ds_with_unfiltered_depth = self if self.depth_filter == 'aligned' else self.__class__(
+            calibration_session_name=self.calibration_session_name,
             calibration_method=self.calibration_method,
-            trajectory_idx=self.cam_indices,
-            reconstruction_idx=self.cam_indices,
-            image_size_hw=self.target_image_size_hw,
-            rotate=self.rotate,
-            **trajectory_kwargs
+            cam_indices=self.cam_indices,
+            session_names=self.session_names,
+            depth_filter='aligned',
+            use_stereo=self.use_stereo,
+            target_image_size_hw=self.target_image_size_hw,
+            apply_intrinsics_fix=self.apply_intrinsics_fix,
+            is_cam_indices_s0=self.is_cam_indices_s0,
+            return_of=False,
+            rotate=self.rotate
         )
+        first_rgbd_images = DatasetVisualizer.sft_format_to_rgbd_images(ds_with_unfiltered_depth[0])
+        # first_pcd = PixelPoints.from_partials(*[_.unproject() for _ in first_rgbd_images]).save_ply(f'/root/capturestudio2/src/{self.session_names[0].split("_")[0].lower()}_first_pcd_stitched.ply')
+        # print('done')
+        # exit(0)
+
+        if floor_wall_data is None:
+            floor_wall_data = RGBDImage.estimate_floor(
+                *first_rgbd_images,
+                export=False,
+                export_path=f'/root/capturestudio2/src/{self.session_names[0].lower()}_floor_wall.png',
+                wall_overshoot_m=trajectory_kwargs.pop('wall_overshoot_m', 2.0),
+            )
+        # FIX: if wall was estimated "in front of" the chord, make the bulging "toward" the wall so that it ends up being away from it
+        wall_overshoot_m = floor_wall_data.pop('wall_overshoot_m', 2.0)
+        if wall_overshoot_m < 0 and 'bulge_mode' not in trajectory_kwargs:
+            trajectory_kwargs['bulge_mode'] = 'toward'
+
+        if orbit_type == 'interpolated':
+            from reconstruction.vis.cam_orbit import InterpolatedCameraOrbit
+            floor_wall_data = {}
+            return InterpolatedCameraOrbit.from_session(
+                calibration_session=self.calibration_session_name,
+                calibration_method=self.calibration_method,
+                trajectory_idx=self.cam_indices,
+                reconstruction_idx=self.cam_indices,
+                image_size_hw=self.target_image_size_hw,
+                rotate=self.rotate,
+                **(floor_wall_data | trajectory_kwargs)
+            )
+        if orbit_type == 'audience':
+            # Create a trajectory anchored on the first and last's camera position, and that is curved and in a plane parallel to the floor
+            from reconstruction.vis.cam_orbit import AudienceViewAnchoredCameraOrbit
+            return AudienceViewAnchoredCameraOrbit.from_session(
+                calibration_session=self.calibration_session_name,
+                calibration_method=self.calibration_method,
+                trajectory_idx=self.cam_indices,
+                reconstruction_idx=self.cam_indices,
+                image_size_hw=self.target_image_size_hw,
+                rotate=self.rotate,
+                **(floor_wall_data | trajectory_kwargs)
+            )
+        raise ValueError('orbit_type not supported: {}'.format(orbit_type))
 
 
 class MultiSessionDataLoader(torch.utils.data.DataLoader):

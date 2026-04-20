@@ -2,6 +2,9 @@
   <dictionary name="project">
     <words>
       <w>extrinsics</w>
+      <w>pointclouds</w>
+      <w>rgbd</w>
+      <w>rgbdimage</w>
     </words>
   </dictionary>
 </component>

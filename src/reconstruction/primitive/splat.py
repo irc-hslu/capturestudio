@@ -10,8 +10,8 @@ from diff_gauss import GaussianRasterizer, GaussianRasterizationSettings
 from plyfile import PlyElement, PlyData
 from pytorch3d.transforms import quaternion_to_matrix, matrix_to_axis_angle
 
-from utils.misc import log, PathUtils
 from reconstruction.primitive.pcd import RGBDImage, PixelPoints
+from utils.misc import log, PathUtils
 from utils.vis import VisUtils
 
 
@@ -187,7 +187,7 @@ class GSImage(RGBDImage):
         pcd = super().unproject()
         return PixelGSPoints.from_pcd(pcd, **self.features)
 
-    def save_png(self, out_path: Optional[Union[Path, str]] = None, striped:bool=False, white_bg: bool = False) -> Optional[np.ndarray]:
+    def save_png(self, out_path: Optional[Union[Path, str]] = None, striped: bool = False, white_bg: bool = False) -> Optional[np.ndarray]:
         """
         Save the GS image as a PNG file.
         The file contains the RGB, mask, depth, and gs attributes, concatenated along the width:
@@ -432,6 +432,7 @@ class PixelGSPoints(PixelPoints):
 
     @functools.cached_property
     def as_3dgs(self) -> Dict[str, torch.Tensor]:
+        _ = self.open3d
         device = 'cuda'
         return dict(
             means3D=torch.from_numpy(self.points[self.valid]).to(device=device, dtype=torch.float32),
@@ -464,7 +465,7 @@ class PixelGSPoints(PixelPoints):
             An optional renderer to use. If None, a new renderer will be created.
 
         Returns
-        -------
+       ----
         RGBDImage
             A new RGBDImage instance containing the projected points and colors.
         """
@@ -538,7 +539,79 @@ class PixelGSPoints(PixelPoints):
         el = PlyElement.describe(elements, 'vertex')
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         PlyData([el]).write(str(out_path))
-        log(f'[{self.__class__.__name__}::save_ply] Gaussian point cloud saved to {out_path}', 'debug')
+        # log(f'[{self.__class__.__name__}::save_ply] Gaussian point cloud saved to {out_path}', 'debug')
+
+    def save_splat(self, out_path: Union[Path, str]) -> None:
+        """
+        Save the gaussian pixel points to a SPLAT file (compatible with antimatter15/splat).
+
+        Binary layout (no header), interleaved per point:
+          [x,y,z]           float32 * 3
+          [sx,sy,sz]        float32 * 3            (actual scales, not log)
+          [r,g,b,a]         uint8   * 4            (r,g,b in 0..255; a = sigmoid(opacity)*255)
+          [qx,qy,qz,qw]     uint8   * 4            (normalized quaternion mapped from [-1,1] -> [0,255])
+
+        Sorting by decreasing exp(sum(log_scales))/sigmoid(opacity), i.e. proportional to (sx*sy*sz)/sigmoid(opacity).
+
+        Parameters
+       -------
+        out_path : Path
+            The path where to save the SPLAT file.
+        """
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Gather valid data
+        mask = self.valid
+        xyz = np.asarray(self.points[mask], dtype=np.float32)  # (N,3)
+        rgb = np.asarray(self.colors[mask], dtype=np.float32)  # (N,3) in [0,1]
+        scales = np.asarray(self.features['scale'][mask], dtype=np.float32)  # (N,3) actual scales
+        rot = np.asarray(self.features['rotation'][mask], dtype=np.float32)  # (N,4)
+        opacity = np.asarray(self.features['opacity'][mask], dtype=np.float32)  # (N,) or (N,1)
+
+        if opacity.ndim == 2 and opacity.shape[1] == 1:
+            opacity = opacity[:, 0]
+
+        # Sort descending by size metric: product(scales)/sigmoid(opacity)
+        vol = np.prod(scales, axis=1)
+        alpha01 = 1.0 / (1.0 + np.exp(-opacity))
+        sort_key = vol / np.maximum(alpha01, 1e-12)
+        order = np.argsort(-sort_key)
+
+        xyz = xyz[order]
+        scales = scales[order]
+        rot = rot[order]
+        rgb = rgb[order]
+        alpha01 = alpha01[order]
+
+        # Colors to RGBA uint8
+        rgba = np.concatenate([np.clip(rgb, 0.0, 1.0), alpha01[:, None]], axis=1)
+        rgba_u8 = (rgba * 255.0 + 0.5).clip(0, 255).astype(np.uint8)
+
+        # Quaternion to uint8 via normalization & [-1,1] -> [0,255]
+        norms = np.linalg.norm(rot, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        q = rot / norms
+        q_u8 = ((q * 128.0) + 128.0).clip(0, 255).astype(np.uint8)  # (N,4)
+
+        # Pack interleaved per point using a structured dtype (no padding)
+        dt = np.dtype([
+            ('xyz', '<f4', (3,)),
+            ('scale', '<f4', (3,)),
+            ('rgba', 'u1', (4,)),
+            ('quat', 'u1', (4,))
+        ])
+        N = xyz.shape[0]
+        rec = np.empty(N, dtype=dt)
+        rec['xyz'] = xyz
+        rec['scale'] = scales
+        rec['rgba'] = rgba_u8
+        rec['quat'] = q_u8
+
+        with open(out_path, 'wb') as f:
+            f.write(rec.tobytes())
+
+        log(f'[{self.__class__.__name__}::save_splat] Gaussian splats saved to {out_path} ({N} points)', 'debug')
 
 
 class GSUtils:
@@ -705,8 +778,8 @@ if __name__ == '__main__':
         calibration_session_root_ = PathUtils.capturestudio_cache_path() / 'Captures_Apr_May_2025' / 'Thanos_2_Calib_1'
         calibration_data_ = CalibrationData.from_session(calibration_session_root_)
         #   - read 2 RGBDImages
-        rgbd_l_ = RGBDImage.from_session(session_root_, calibration_data_, cam_idx=8, color_ts=1746110341432, depth_ts=1746110341433).resize(1024, 1280 if data_src_ == 'session' else 1024)
-        rgbd_r_ = RGBDImage.from_session(session_root_, calibration_data_, cam_idx=7, color_ts=1746110341432, depth_ts=1746110341433).resize(1024, 1280 if data_src_ == 'session' else 1024)
+        rgbd_l_ = RGBDImage.from_session(session_root_, calibration_data_, cam_idx=4, color_ts=1746110326491, depth_ts=1746110326492).resize(1024, 1280 if data_src_ == 'session' else 1024)
+        rgbd_r_ = RGBDImage.from_session(session_root_, calibration_data_, cam_idx=5, color_ts=1746110326478, depth_ts=1746110326479).resize(1024, 1280 if data_src_ == 'session' else 1024)
     else:
         # read THUMAN data
         thuman_root_ = Path('/media/charisoudis/nas_transmixr/Simone/Volumetric_Video/Human Datasets/THuman2_1/rendered@2m')
@@ -715,19 +788,30 @@ if __name__ == '__main__':
         rgbd_r_ = RGBDImage.from_thuman(thuman_root_, model=0, main_cam_idx=0, sub_cam_idx=3)
 
     # create GSImages
-    gs_l_ = GSImage.from_rgbd_image(rgbd_l_, gs_regressor_model='gps', gs_regressor_checkpoint='neptune://154/best')
-    gs_l_.save_png(f'{data_src_}_gs_l.png', striped=True)
-    exit(0)
-    gs_r_ = GSImage.from_rgbd_image(rgbd_r_, gs_regressor_model='gps', gs_regressor_checkpoint='neptune://154/best')
-    gs_r_.save_png(f'{data_src_}_gs_r.png')
-    # reproject GSImages to each other
-    with torch.no_grad():
-        gs_l_.reproject_to(gs_l_, align=False, use_cache=True).save_png(f'{data_src_}_gs_l2l.png')
-        gs_l_.reproject_to(gs_r_, align=False, use_cache=True).save_png(f'{data_src_}_gs_l2r.png')
-        gs_r_.reproject_to(gs_l_, align=False, use_cache=True).save_png(f'{data_src_}_gs_r2l.png')
-        gs_r_.reproject_to(gs_r_, align=False, use_cache=True).save_png(f'{data_src_}_gs_r2r.png')
+    gs_l_: GSImage = GSImage.from_rgbd_image(rgbd_l_, gs_regressor_model='gps', gs_regressor_checkpoint='neptune://154/best')
+    # gs_l_.save_png(f'{data_src_}_gs_l.png', striped=True)
+    gs_r_: GSImage = GSImage.from_rgbd_image(rgbd_r_, gs_regressor_model='gps', gs_regressor_checkpoint='neptune://154/best')
+    # gs_r_.save_png(f'{data_src_}_gs_r.png')
+    # # reproject GSImages to each other
+    # with torch.no_grad():
+    #     gs_l_.reproject_to(gs_l_, align=False, use_cache=True).save_png(f'{data_src_}_gs_l2l.png')
+    #     gs_l_.reproject_to(gs_r_, align=False, use_cache=True).save_png(f'{data_src_}_gs_l2r.png')
+    #     gs_r_.reproject_to(gs_l_, align=False, use_cache=True).save_png(f'{data_src_}_gs_r2l.png')
+    #     gs_r_.reproject_to(gs_r_, align=False, use_cache=True).save_png(f'{data_src_}_gs_r2r.png')
     # create point clouds from GSImages
-    gs_pcd_l_ = gs_l_.unproject()
+    import viser, time
+
+    server_ = viser.ViserServer(host='0.0.0.0', port=8081)
+    gs_r_.to_viser(server_, add_camera_frustum=True, update_camera=False)
+    gs_l_.to_viser(server_, add_camera_frustum=True, update_camera=True)
+    print("Viser running — press Ctrl+C to stop")
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
+    exit(0)
+
     gs_pcd_r_ = gs_r_.unproject()
     gs_pcd_l_.save_ply(f'{data_src_}_l_gs.ply')
     gs_pcd_r_.save_ply(f'{data_src_}_r_gs.ply')

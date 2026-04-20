@@ -2,19 +2,27 @@ import torch
 import torch.nn.functional as F
 
 from reconstruction.arch.gpsgaussian.utils import bilinear_sampler
-from utils.misc import PathUtils
+from utils.misc import PathUtils, env_get
 
 try:
     import corr_sampler
 except:
+    import os
     from torch.utils.cpp_extension import load
 
+    os.environ['CC'] = '/usr/bin/gcc-13'
+    os.environ['CXX'] = '/usr/bin/g++-13'
+    os.environ['CUDAHOSTCXX'] = '/usr/bin/g++-13'
+    os.environ['TORCH_CUDA_ARCH_LIST'] = "8.9"
+    os.environ['USE_NINJA'] = "1"
     ext_dir = PathUtils.resources_path() / 'torch_ext' / 'corr'
     corr_sampler = load(
         name='corr_sampler',
         sources=[f'{ext_dir}/sampler.cpp', f'{ext_dir}/sampler_kernel.cu'],
-        extra_cuda_cflags=['-std=c++17'],
-        # verbose=True
+        extra_cflags=["-D_GLIBCXX_USE_CXX11_ABI=1", "-O3", "-std=c++17"],
+        extra_cuda_cflags=['-O2', '--std=c++17', "-ccbin=/usr/bin/g++-13"],
+        # verbose=True,
+        with_cuda=True,
     )
     import corr_sampler
 

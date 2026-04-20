@@ -15,8 +15,6 @@ THUMAN_ROOT = Path('/root/DATASETS/THuman2_1')
 CALIBRATION_CAPTURES_ROOT = PathUtils.capturestudio_cache_path() / 'Captures_Apr_May_2025'
 
 
-
-
 class MultiSessionDataset(Dataset):
     """
     Encapsulates multiple session datasets.
@@ -264,4 +262,3 @@ class MultiSessionDataLoader(DataLoader):
             collate_fn=collate_fn,
             persistent_workers=persistent_workers
         )
-
