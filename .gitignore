@@ -1,1 +1,15 @@
-.idea
+.env
+out/*
+!out/.gitkeep
+recon-viewer/public/reconstructions/*
+!recon-viewer/public/reconstructions/.gitkeep
+!resources/calibration_patterns/*/charuco.png
+*.jpg
+*.png
+*.jpeg
+*.ply
+*.7z
+*.zip
+*.svg
+*_thanos.py
+*_simone.py
