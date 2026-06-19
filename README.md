@@ -29,7 +29,7 @@ The code for the HSLU CaptureStudio pipeline (capture, reconstruction, and expor
 - [x] prepared for a public release
 - [x] initial version out (v1)
 - [x] incorporated v2 improvements
-- [ ] complete requirements.txt
+- [x] complete `requirements.txt` > `pyproject.toml` (using **uv**)
 - [ ] scripts for reconstruction and export
 
 ---

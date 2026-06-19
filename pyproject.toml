@@ -1,0 +1,81 @@
+[project]
+name = "capturestudio"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "billiard",
+    "cairosvg",
+    "celery",
+    "click",
+    "colorlog",
+    "colour",
+    "easydict",
+    "einops",
+    "h5py",
+    "humanize",
+    "imageio",
+    "imageio-ffmpeg",
+    "kombu",
+    "kornia",
+    "lpips",
+    "matplotlib",
+    "moderngl",
+    "moviepy",
+    "numpy",
+    "omegaconf",
+    "open3d",
+    "pandas",
+    "pillow",
+    "plyfile",
+    "pycocotools",
+    "pyorbbecsdk2",
+    "pyrender",
+    "python-dotenv",
+    "pytorch3d",
+    "pytz",
+    "sam3",
+    "scikit-learn",
+    "scikit-image",
+    "scipy",
+    "screeninfo",
+    "setuptools<82",
+    "smplx",
+    "toml",
+    "torch==2.9.1",
+    "torchvision==0.24.1",
+    "tqdm",
+    "transformers",
+    "trimesh",
+    "ultralytics",
+    "videoflow",
+    "viser",
+    "xxhash",
+    "einops>=0.8.2",
+    "pycocotools>=2.0.11",
+]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128" },
+]
+torchvision = [
+    { index = "pytorch-cu128" },
+]
+pytorch3d = { url = "https://github.com/MiroPsota/torch_packages_builder/releases/download/pytorch3d-0.7.9%2Bd9839a9/pytorch3d-0.7.9+d9839a9pt2.9.1cu128-cp312-cp312-linux_x86_64.whl" }
+sam3 = { git = "https://github.com/facebookresearch/sam3.git" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:pkg_resources is deprecated as an API.*:UserWarning:pkg_resources",
+    "ignore:Importing from timm\\.models\\.layers is deprecated.*:FutureWarning:timm.models.layers",
+]

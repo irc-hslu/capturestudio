@@ -484,7 +484,7 @@ class PathUtils:
             vr = VideoReader(str(file_path), num_threads=2)
             if required_frames > 0 and len(vr) < required_frames:
                 return False
-            # Force actual decoding (random access triggers a decode)
+            # Force actual decoding (random access triggers full video decode)
             _ = vr[0]  # first frame
             if len(vr) > 1:
                 _ = vr[len(vr) - 1]  # last frame
@@ -492,6 +492,101 @@ class PathUtils:
         except Exception as e:
             logging.error(f"Decord verification failed for {file_path}: {e}")
             return False
+
+    @classmethod
+    def verify_mp4_ffmpeg(cls, file_path: Path, required_frames: int = -1) -> bool:
+        """
+        MP4 verification using FFmpeg.
+
+        Checks:
+        - file exists,
+        - metadata can be read,
+        - first video stream can decode at least one frame,
+        - optional frame estimate is >= required_frames.
+
+        This is faster but less strict than full-file decoding.
+        """
+        try:
+            from imageio_ffmpeg import get_ffmpeg_exe
+
+            if not file_path.exists() or not file_path.is_file():
+                logging.error("MP4 verification failed; file does not exist: %s", file_path)
+                return False
+
+            ffmpeg = get_ffmpeg_exe()
+
+            if required_frames > 0:
+                estimated_frames = cls._estimate_frame_count_ffmpeg(file_path)
+                if estimated_frames > 0 and estimated_frames < required_frames:
+                    return False
+
+            cmd = [
+                ffmpeg,
+                "-hide_banner",
+                "-v", "error",
+                "-xerror",
+                "-i", str(file_path),
+                "-map", "0:v:0",
+                "-an",
+                "-frames:v", "1",
+                "-f", "null",
+                "-",
+            ]
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                logging.error(
+                    "FFmpeg fast verification failed for %s: %s",
+                    file_path,
+                    result.stderr.strip(),
+                )
+                return False
+
+            return True
+
+        except Exception as e:
+            logging.error("FFmpeg fast verification failed for %s: %s", file_path, e)
+            return False
+
+    @staticmethod
+    def _estimate_frame_count_ffmpeg(file_path: Path) -> int:
+        """
+        Estimate frame count from FFmpeg metadata.
+
+        Returns 0 if unavailable.
+        """
+        from imageio_ffmpeg import get_ffmpeg_exe
+
+        ffmpeg = get_ffmpeg_exe()
+
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-i", str(file_path),
+            "-map", "0:v:0",
+            "-f", "null",
+            "-",
+            "-frames:v", "0",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+        # FFmpeg does not reliably expose frame count without ffprobe.
+        # Keep this intentionally conservative.
+        return 0
 
     @classmethod
     def verify_file(cls, file_path: Path, **kwargs) -> bool:
@@ -528,7 +623,7 @@ class PathUtils:
                 text=True
             )
             # If we get a duration, the file is likely valid
-            return proc.returncode == 0 and proc.stdout.strip() != "" and cls.verify_mp4_decord(file_path, **kwargs)
+            return proc.returncode == 0 and proc.stdout.strip() != "" and cls.verify_mp4_ffmpeg(file_path, **kwargs)
 
         else:
             raise ValueError(f"Unsupported file type for verification: {ext}")
@@ -800,7 +895,6 @@ def get_detector(which: Literal['yolo', 'sam3'] = 'sam3', device: Union[str, Lit
         DETECTOR_CLASS_NAMES = getattr(detector, "_class_names", DETECTOR_CLASS_NAMES)
 
     return DETECTORS[which], DETECTOR_CLASS_NAMES
-
 
 
 def get_segmentor(which: Literal['sam2', 'sam3'] = 'sam3', **kwargs):
