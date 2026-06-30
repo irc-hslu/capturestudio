@@ -49,6 +49,7 @@ app.conf.update(
     accept_content=["json"],
     task_acks_late=False,  # FIX: set to False if there are long-running tasks
     worker_prefetch_multiplier=1,  # important for long tasks
+    worker_enable_remote_control=False,
     task_track_started=True,
     task_soft_time_limit=5400,  # 90 min
     task_time_limit=21600,  # 6 hours

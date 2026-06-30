@@ -52,6 +52,12 @@ dependencies = [
     "xxhash",
     "einops>=0.8.2",
     "pycocotools>=2.0.11",
+    "redis>=8.0.1",
+    "transformations>=2026.1.18",
+    "scipy-stubs~=1.17.1",
+    "celery-types>=0.26.0",
+    "pandas-stubs~=3.0.3",
+    "numba>=0.65.1",
 ]
 
 [tool.uv]

@@ -1,4 +1,5 @@
 import copy
+import json
 import struct
 import sys
 import threading
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Union, Literal, Optional, List, Dict, Tuple
 
 import click
+import cv2.aruco
 import h5py
 import numpy as np
 from dotenv import load_dotenv
@@ -478,7 +480,7 @@ class SyncedSession:
             cc_cam_name = f'cam{int(nas_cam_name.split(" ", 1)[0]):02d}'
 
             cc_path = self.capturestudio_cache_path / 'orbbec' / cc_cam_name
-            if cc_path.exists() and (cc_path / 'color').exists() and multi_sync_info_path.exists() and not force:
+            if cc_path.exists() and (cc_path / 'color').exists() and not force:
                 log(f"[{self.session_name}::download_from_nas] Camera {cc_cam_name} already exists in {self.capturestudio_cache_path}. Skipping download.", 'debug')
                 continue
 
@@ -495,17 +497,16 @@ class SyncedSession:
                 )
             )
 
-        download_stage = Stage(
-            name='download_from_nas',
-            parts=download_tasks
-        )
         if download_tasks:
+            download_stage = Stage(
+                name='download_from_nas',
+                parts=download_tasks
+            )
             self._pipeline.stages.append(download_stage)
         return self
 
-    def synchronize(self, force: bool = False) -> 'SyncedSession':
+    def synchronize(self, trim_start_frame: Optional[int] = None, trim_total_frames: Optional[int] = None, force: bool = False) -> 'SyncedSession':
         should_sync = True
-        should_generate_multiview_videos = True
         if (self.capturestudio_cache_path / 'orbbec').exists():
             color_counts = []
             depth_counts = []
@@ -564,31 +565,40 @@ class SyncedSession:
             ]
         )
 
+        sync_tasks = []
         if should_sync:
-            sync_tasks = ChainSpec(
-                parts=[
-                    TaskSpec(
-                        name='synchronization.synchronize_frames',
-                        kwargs=dict(
-                            capturestudio_cache_root=str(self.capturestudio_cache_path),
-                            excel_sheet=self.excel_sheet,
-                            excel_file_path=str(self.excel_file_path),
-                        )
-                    ),
-                    multiview_video_generation_tasks
-                ]
+            sync_tasks.append(
+                TaskSpec(
+                    name='synchronization.synchronize_frames',
+                    kwargs=dict(
+                        capturestudio_cache_root=str(self.capturestudio_cache_path),
+                        excel_sheet=self.excel_sheet,
+                        excel_file_path=str(self.excel_file_path),
+                    )
+                )
             )
-        else:
-            sync_tasks = multiview_video_generation_tasks
+        if trim_start_frame is not None:
+            assert trim_total_frames is not None and trim_start_frame > 0 and trim_total_frames > 0
+            sync_tasks.append(
+                TaskSpec(
+                    name='synchronization.trim_frames',
+                    kwargs=dict(
+                        capturestudio_cache_root=str(self.capturestudio_cache_path),
+                        start_frame=trim_start_frame,
+                        total_frames=trim_total_frames,
+                    )
+                )
+            )
+        sync_tasks.append(multiview_video_generation_tasks)
 
         sync_stage = Stage(
             name='synchronize',
-            parts=[sync_tasks]
+            parts=[ChainSpec(parts=sync_tasks) if len(sync_tasks) > 1 else sync_tasks[0]],
         )
         self._pipeline.stages.append(sync_stage)
         return self
 
-    def calibrate(self, calibration_method: Literal['Caliscope', 'MultiCamCalib'], start_offset: int = 0, total_frames: int = -1) -> 'SyncedSession':
+    def calibrate(self, calibration_method: Literal['Caliscope', 'MultiCamCalib', 'HSLU'], start_offset: int = 0, total_frames: int = -1, rotate: Optional[Literal['90_CLOCKWISE', '90_COUNTERCLOCKWISE', '180']] = None) -> 'SyncedSession':
         nas_cam_folders = sorted([item for item in (self.nas_path if self.nas_storage_type == 'h5' else (self.nas_path / 'raw_color')).iterdir() if item.is_dir() and not item.name.startswith('_') and item.name not in ['caliscope']],
                                  key=lambda x: int(x.name.split(' ', 1)[0]))
         if calibration_method == 'Caliscope':
@@ -601,6 +611,7 @@ class SyncedSession:
                         start_offset=start_offset,
                         total_frames=total_frames,
                         fps=30,
+                        rotate=rotate
                     )
                 )
                 for nas_cam_folder in nas_cam_folders
@@ -609,23 +620,102 @@ class SyncedSession:
                 name='calibration.generate_caliscope_config',
                 kwargs=dict(
                     capturestudio_cache_root=str(self.capturestudio_cache_path),
+                    rotate=rotate
                 )
             )
             calibration_tasks = GroupSpec(
                 parts=[config_generation_task, *video_generation_tasks]
             )
+
+            calibration_stage = Stage(
+                name='calibrate',
+                parts=[calibration_tasks]
+            )
+
+            self._pipeline.stages.append(calibration_stage)
+
+        elif calibration_method.upper() == 'HSLU':
+            nas_cam_folders = sorted([item for item in (self.nas_path if self.nas_storage_type == 'h5' else (self.nas_path / 'raw_color')).iterdir() if item.is_dir() and not item.name.startswith('_') and item.name not in ['caliscope']],
+                                     key=lambda x: int(x.name.split(' ', 1)[0]))
+            all_cam_tasks = []
+            all_corner_3d_dirs = []
+            for nas_cam_folder in nas_cam_folders:
+                nas_cam_name = nas_cam_folder.name
+                cc_cam_name = f'cam{int(nas_cam_name.split(" ", 1)[0]):02d}'
+                cam_dir = self.capturestudio_cache_path / 'orbbec' / cc_cam_name
+
+                has_depth = (cam_dir / 'depth').exists() and (len(list((cam_dir / 'depth').glob('*.npy'))) > 0 or len(list((cam_dir / 'depth').glob('*.png'))) > 0)
+                assert has_depth, 'For our calibration method to work all cameras need to record depth! Stay tuned for updates to support mixed recording modes.'
+                header = GroupSpec(
+                    parts=[
+                        TaskSpec(
+                            name='preprocessing.depth.align_depth_to_color',
+                            kwargs=dict(
+                                depth_dir=str(cam_dir / 'depth'),
+                                out_dir=str(cam_dir / 'depth_aligned'),
+                                parameters_dir=str(cam_dir / 'parameters'),
+                                start_offset=0,
+                                total_frames=-1,
+                                depth_format='png'
+                            )
+                        ),
+                        TaskSpec(
+                            name='calibration.detect_corners_2d',
+                            kwargs=dict(
+                                color_dir=str(cam_dir / 'color'),
+                                session_metadata_path=str(self.capturestudio_cache_path / 'orbbec' / 'session_metadata.json'),
+                                out_dir=str(cam_dir / 'color_corners'),
+                                total_detections=-1,
+                            )
+                        )
+                    ]
+                )
+                body = TaskSpec(
+                    name='calibration.lift_corners_3d',
+                    kwargs=dict(
+                        corners_dir=str(cam_dir / 'color_corners'),
+                        depth_dir=str(cam_dir / 'depth_aligned'),
+                        parameters_dir=str(cam_dir / 'parameters'),
+                        out_dir=str(cam_dir / 'corners_3d'),
+                    )
+                )
+                cam_tasks = ChordSpec(
+                    header=header,
+                    body=body
+                )
+                all_cam_tasks.append(cam_tasks)
+                all_corner_3d_dirs.append(str(cam_dir / 'corners_3d'))
+
+            pre_calibration_stage = Stage(
+                name='preprocess_for_calibration',
+                parts=all_cam_tasks
+            )
+            self._pipeline.stages.append(pre_calibration_stage)
+
+            calibration_stage = Stage(
+                name='calibrate_hslu',
+                parts=[
+                    TaskSpec(
+                        name='calibration.calibrate_hslu',
+                        args=all_corner_3d_dirs,
+                        kwargs=dict(
+                            out_dir=str(self.capturestudio_cache_path / '__calib__' / 'hslu'),
+                            min_cams_per_cluster=3,
+                            min_clusters=1,
+                            force=False,
+                            rotate=rotate
+                        )
+                    )
+                ]
+            )
+            self._pipeline.stages.append(calibration_stage)
+
         else:
             raise NotImplementedError(f"Calibration method {calibration_method} not implemented")
 
-        calibration_stage = Stage(
-            name='calibrate',
-            parts=[calibration_tasks]
-        )
-
-        self._pipeline.stages.append(calibration_stage)
         return self
 
-    def preprocess(self, rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None) -> 'SyncedSession':
+    def preprocess(self, rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None, interactive_annotation: bool = False) -> 'SyncedSession':
         if rotate is not None:
             assert rotate in ['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180'], f"Invalid rotate value: {rotate}. Must be one of '90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180'."
 
@@ -733,6 +823,19 @@ class SyncedSession:
 
             all_cam_tasks.append(cam_tasks)
 
+        if interactive_annotation:
+            interactive_segmentation_task = TaskSpec(
+                name='preprocessing.color.interactively_annotate',
+                kwargs=dict(
+                    session_path=str(self.capturestudio_cache_path),
+                )
+            )
+            all_cam_tasks = [
+                ChainSpec(
+                   parts=[interactive_segmentation_task, GroupSpec(parts=all_cam_tasks)],
+                )
+            ]
+
         preprocessing_stage = Stage(
             name='preprocess',
             parts=all_cam_tasks
@@ -740,14 +843,14 @@ class SyncedSession:
         self._pipeline.stages.append(preprocessing_stage)
         return self
 
-    def reconstruct(self, calibration_session_name: str, start_frame: int, total_frames: int, cam_idx: List[int], force: bool = False) -> 'SyncedSession':
+    def reconstruct(self, calibration_session_name: str, start_frame: int, total_frames: int, cam_idx: List[int], orbit_type: Literal['audience', 'interpolated'], force: bool = False, rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None, camera_orbit_velocity: float = 0.3, save_ply: bool = False) -> 'SyncedSession':
         if total_frames == 0:
             log(f"[{self.session_name}::reconstruct] Total frames is 0. Skipping reconstruction.", 'warning')
             return self
 
         all_tasks = []
         for recon_type in ['pcd', 'gs']:
-            for depth_source in ['bilateral_temporal', 'stereo']:
+            for depth_source in ['bilateral_temporal']:
                 reconstruction_task = TaskSpec(
                     name=f'reconstruction.{recon_type}_reconstruction',
                     kwargs=dict(
@@ -758,7 +861,11 @@ class SyncedSession:
                         total_frames=total_frames,
                         cam_idx=cam_idx,
                         excel_data=self.excel_data.to_dict(),
-                        force=force
+                        force=force,
+                        rotate=rotate,
+                        orbit_type=orbit_type,
+                        camera_orbit_velocity=camera_orbit_velocity,
+                        save_ply=save_ply
                     )
                 )
                 teaser_task = TaskSpec(
@@ -808,6 +915,46 @@ class SyncedSession:
             ]
         )
         self._pipeline.stages.append(reconstruction_stage)
+        return self
+
+    def upload(self, delete_capturestudio_cache: bool = False, delete_nas_cache: bool = False) -> 'SyncedSession':
+        if not self.nas_cache_root.exists():
+            self.nas_cache_root.mkdir(parents=True, exist_ok=True)
+
+        # Get all cameras
+        nas_cam_folders = sorted([item for item in (self.nas_path if self.nas_storage_type == 'h5' else (self.nas_path / 'raw_color')).iterdir() if item.is_dir() and not item.name.startswith('_') and item.name not in ['caliscope']],
+                                 key=lambda x: int(x.name.split(' ', 1)[0]))
+
+        upload_tasks = []
+        for nas_cam_folder in nas_cam_folders:
+            nas_cam_name = nas_cam_folder.name
+            cc_cam_name = f'cam{int(nas_cam_name.split(" ", 1)[0]):02d}'
+            cc_path = self.capturestudio_cache_path / 'orbbec' / cc_cam_name
+            # if not cc_path.exists():
+            #     log(f"[{self.session_name}::upload_to_nas] Camera {cc_cam_name} already uploaded to {self.nas_path}. Skipping upload.", 'debug')
+            #     continue
+
+            upload_tasks.append(
+                TaskSpec(
+                    name='upload.upload_to_nas',
+                    kwargs=dict(
+                        capturestudio_cache_root=str(self.capturestudio_cache_path),
+                        nas_cache_root=str(self.nas_cache_root),
+                        nas_root=str(self.nas_root),
+                        orbbec_id=self.orbbec_id,
+                        cam_name=nas_cam_name,
+                        delete_capturestudio_cache=delete_capturestudio_cache,
+                        delete_nas_cache=delete_nas_cache,
+                    )
+                )
+            )
+
+        if upload_tasks:
+            upload_stage = Stage(
+                name='upload_to_nas',
+                parts=upload_tasks
+            )
+            self._pipeline.stages.append(upload_stage)
         return self
 
     def export_tasks_graph(self, export_path: Union[Path, str, Literal['auto']] = 'auto', export_format: Literal['svg', 'pdf', 'png'] = 'pdf') -> 'SyncedSession':

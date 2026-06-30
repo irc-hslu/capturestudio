@@ -531,8 +531,8 @@ def trim_frames_for_session(session_root: str, start_frame_offset: int, total_fr
     if not cam_dirs:
         raise FileNotFoundError(f"No camera folders found under: {orbbec_root}")
 
-    # FIX: from a bug there were being generated folders with multiple "_trimmed" suffices
-    _cleanup_recursive_trimmed_folders(session_root)
+    # # FIX: from a bug there were being generated folders with multiple "_trimmed" suffices
+    # _cleanup_recursive_trimmed_folders(session_root)
 
     def _counts_from_trim_info(data: Dict[str, Any]) -> Dict[str, Tuple[int, int]]:
         cams = data.get('cams', {}) or {}

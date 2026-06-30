@@ -362,7 +362,7 @@ def segment(video_path: Path,
 
         # Propagate masks and merge per frame
         if which_segmentor == 'sam2':
-            forward_prop = segmentor.propagate_in_video(state, reverse=False)
+            forward_prop = segmentor.propagate_in_video(state, reverse=True)
             if first_frame_global_idx > 0 and False:
                 backward_prop = segmentor.propagate_in_video(state, reverse=True)
                 propagator = itertools.chain(forward_prop, backward_prop)
