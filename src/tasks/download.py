@@ -277,9 +277,11 @@ def _from_nas_cache_h5_to_capturestudio_cache_raw(nas_cache_root: str, orbbec_id
                             with open(capturestudio_cache_path / modality / f'{color_ts}.png', "wb") as f:
                                 f.write(modality_data[...].tobytes())
 
-                if 'depth' in hf:
+                if 'depth' in hf and i < len(depth_keys):  # Prevent IndexError if there are fewer depth frames than color frames
                     depth_ts = depth_keys[i]
                     depth_data = hf['depth'][depth_ts]
+                    if not (capturestudio_cache_path / 'depth').exists():
+                        (capturestudio_cache_path / 'depth').mkdir()
                     depth_png_path = capturestudio_cache_path / 'depth' / f'{depth_ts}.png'
                     # Depth datasets are stored either as:
                     #  - uint8 1D array of PNG bytes (preferred for PNG storage), or
@@ -362,4 +364,3 @@ def download_from_nas(nas_root: str, orbbec_id: str, cam_name: str, capturestudi
         _from_nas_h5_to_nas_cache_h5(nas_root, orbbec_id, cam_name, nas_cache_root)
         _from_nas_cache_h5_to_capturestudio_cache_raw(nas_cache_root, orbbec_id, cam_name, capturestudio_cache_root)
     return None
-
