@@ -498,8 +498,8 @@ class CalibrationData:
         scale = max(tgt_h / src_h, tgt_w / src_w)
         new_h, new_w = int(round(src_h * scale)), int(round(src_w * scale))
         image_rs = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        mask_rs = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-        depth_rs = None if depth is None else cv2.resize(depth, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        mask_rs = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        depth_rs = None if depth is None else cv2.resize(depth, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
         # center crop
         top = (new_h - tgt_h) // 2
         left = (new_w - tgt_w) // 2
@@ -789,7 +789,6 @@ class MultiCamCalibReader(CaliscopeReader):
             camera_name = self.camera_names[self.camera_indices_s0.index(cam_index_s0)]
             if name in self.override_cam_mapping and self.override_cam_mapping[name] != name:
                 log(f'[{self.__class__.__name__}::read] {name} --> {cam_index_s0} --> {camera_name}', 'warning')
-            data['size'] = (3840, 2160) if 'size' not in data else data['size']
             extri = None if (data['rvec'] == 'null' or data['tvec'] == 'null') else np.hstack([
                 data['rvec'] if isinstance(data['rvec'], np.ndarray) else cv2.Rodrigues(np.array(data['rvec']).reshape(3, 1))[0],
                 np.atleast_2d(data['tvec']).reshape((-1, 1))
@@ -822,7 +821,7 @@ class MultiCamCalibReader(CaliscopeReader):
                 rotation=extri[:3, :3] if extri is not None else None,
                 translation=extri[:3, 3] if extri is not None else None,
                 extri=extri,
-                image_size=(data['size'][1], data['size'][0]),  # H, W
+                image_size=(data['size'][1], data['size'][0]),  # H, W TODO data['size'] = (3840, 2160) if 'size' not in data else data['size']
             )
         # sort cam_dict by cam_index_s0
         cam_dict = dict(sorted(cam_dict.items(), key=lambda item: item[1]['cam_index_s0']))
