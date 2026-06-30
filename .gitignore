@@ -13,3 +13,4 @@ recon-viewer/public/reconstructions/*
 *.svg
 *_thanos.py
 *_simone.py
+Capture Sessions.xls

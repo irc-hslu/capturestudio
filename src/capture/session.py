@@ -1,5 +1,6 @@
 import copy
 import json
+import shutil
 import struct
 import sys
 import threading
@@ -473,7 +474,15 @@ class SyncedSession:
         nas_cam_folders = sorted([item for item in (self.nas_path if self.nas_storage_type == 'h5' else (self.nas_path / 'raw_color')).iterdir() if item.is_dir() and not item.name.startswith('_') and item.name not in ['caliscope']],
                                  key=lambda x: int(x.name.split(' ', 1)[0]))
 
-        multi_sync_info_path = self.capturestudio_cache_path / 'orbbec' / 'multi_sync.info'
+        # FIX: copy session metadata file
+        session_metadata_file_nas = self.nas_path / 'session_metadata.json'
+        session_metadata_file_nas_cache = self.nas_cache_root / 'Orbbec_Fempto_Bolt' / self.orbbec_id / 'session_metadata.json'
+        if not session_metadata_file_nas_cache.parent.exists():
+            session_metadata_file_nas_cache.parent.mkdir(parents=True, exist_ok=True)
+        if not session_metadata_file_nas.exists():
+            shutil.copyfile(session_metadata_file_nas, session_metadata_file_nas_cache)
+
+        # Per-cam download worker
         download_tasks = []
         for nas_cam_folder in nas_cam_folders:
             nas_cam_name = nas_cam_folder.name
@@ -832,7 +841,7 @@ class SyncedSession:
             )
             all_cam_tasks = [
                 ChainSpec(
-                   parts=[interactive_segmentation_task, GroupSpec(parts=all_cam_tasks)],
+                    parts=[interactive_segmentation_task, GroupSpec(parts=all_cam_tasks)],
                 )
             ]
 
