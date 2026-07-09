@@ -8,17 +8,21 @@
       <w>Hochschule</w>
       <w>Luzern</w>
       <w>capturestudio</w>
+      <w>climits</w>
       <w>coeffs</w>
       <w>conrady</w>
+      <w>cstdint</w>
       <w>disto</w>
       <w>extri</w>
       <w>extrinsics</w>
+      <w>forceinline</w>
       <w>intri</w>
       <w>kannala</w>
       <w>orbbec</w>
       <w>pointclouds</w>
       <w>rgbd</w>
       <w>rgbdimage</w>
+      <w>xywh</w>
     </words>
   </dictionary>
 </component>

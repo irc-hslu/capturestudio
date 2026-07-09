@@ -61,6 +61,10 @@ dependencies = [
     "flower>=2.0.1",
     "xlrd>=2.0.2",
     "decord>=0.6.0",
+    "cc-torch",
+    "torch-generic-nms",
+    "loguru",
+    "diff-gauss",
 ]
 
 [tool.uv]
@@ -77,6 +81,9 @@ torchvision = [
 ]
 pytorch3d = { url = "https://github.com/MiroPsota/torch_packages_builder/releases/download/pytorch3d-0.7.9%2Bd9839a9/pytorch3d-0.7.9+d9839a9pt2.9.1cu128-cp312-cp312-linux_x86_64.whl" }
 sam3 = { git = "https://github.com/facebookresearch/sam3.git" }
+cc-torch = { git = "https://github.com/ronghanghu/cc_torch.git" }
+torch-generic-nms = { git = "https://github.com/ronghanghu/torch_generic_nms" }
+diff-gauss = { git = "https://github.com/charisoudis/diff-gaussian-rasterization.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

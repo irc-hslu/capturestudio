@@ -128,12 +128,14 @@ source = { virtual = "." }
 dependencies = [
     { name = "billiard", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "cairosvg", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "cc-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "celery", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "celery-types", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "click", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "colorlog", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "colour", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "decord", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "diff-gauss", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "easydict", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "einops", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "flower", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -143,6 +145,7 @@ dependencies = [
     { name = "imageio-ffmpeg", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "kombu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "kornia", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "loguru", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "lpips", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "matplotlib", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "moderngl", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -172,6 +175,7 @@ dependencies = [
     { name = "smplx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "toml", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch-generic-nms", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "tqdm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "transformations", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -188,12 +192,14 @@ dependencies = [
 requires-dist = [
     { name = "billiard" },
     { name = "cairosvg" },
+    { name = "cc-torch", git = "https://github.com/ronghanghu/cc_torch.git" },
     { name = "celery" },
     { name = "celery-types", specifier = ">=0.26.0" },
     { name = "click" },
     { name = "colorlog" },
     { name = "colour" },
     { name = "decord", specifier = ">=0.6.0" },
+    { name = "diff-gauss", git = "https://github.com/charisoudis/diff-gaussian-rasterization.git" },
     { name = "easydict" },
     { name = "einops" },
     { name = "einops", specifier = ">=0.8.2" },
@@ -204,6 +210,7 @@ requires-dist = [
     { name = "imageio-ffmpeg" },
     { name = "kombu" },
     { name = "kornia" },
+    { name = "loguru" },
     { name = "lpips" },
     { name = "matplotlib" },
     { name = "moderngl" },
@@ -234,6 +241,7 @@ requires-dist = [
     { name = "smplx" },
     { name = "toml" },
     { name = "torch", specifier = "==2.9.1", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torch-generic-nms", git = "https://github.com/ronghanghu/torch_generic_nms" },
     { name = "torchvision", specifier = "==0.24.1", index = "https://download.pytorch.org/whl/cu128" },
     { name = "tqdm" },
     { name = "transformations", specifier = ">=2026.1.18" },
@@ -245,6 +253,11 @@ requires-dist = [
     { name = "xlrd", specifier = ">=2.0.2" },
     { name = "xxhash" },
 ]
+
+[[package]]
+name = "cc-torch"
+version = "0.2"
+source = { git = "https://github.com/ronghanghu/cc_torch.git#446e9360ed10d3c8d03925ccb5f220ccb62009de" }
 
 [[package]]
 name = "celery"
@@ -489,6 +502,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
 ]
+
+[[package]]
+name = "diff-gauss"
+version = "1.0.10.0"
+source = { git = "https://github.com/charisoudis/diff-gaussian-rasterization.git#bceca23f7a3d0d0dd099a21b096177189072b953" }
 
 [[package]]
 name = "easydict"
@@ -911,6 +929,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/88/a8952b6d5c21e74cbf158515b779666f692846502623e9e3c39d8e8ba25f/llvmlite-0.47.0.tar.gz", hash = "sha256:62031ce968ec74e95092184d4b0e857e444f8fdff0b8f9213707699570c33ccc", size = 193614, upload-time = "2026-03-31T18:29:53.497Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/4b/e3f2cd17822cf772a4a51a0a8080b0032e6d37b2dbe8cfb724eac4e31c52/llvmlite-0.47.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:5853bf26160857c0c2573415ff4efe01c4c651e59e2c55c2a088740acfee51cd", size = 56275178, upload-time = "2026-03-31T18:28:48.342Z" },
+]
+
+[[package]]
+name = "loguru"
+version = "0.7.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
 ]
 
 [[package]]
@@ -2084,6 +2111,11 @@ dependencies = [
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.9.1%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:7cb4018f4ce68b61fd3ef87dc1c4ca520731c7b5b200e360ad47b612d7844063", upload-time = "2026-01-26T16:54:25Z" },
 ]
+
+[[package]]
+name = "torch-generic-nms"
+version = "0.1"
+source = { git = "https://github.com/ronghanghu/torch_generic_nms#fcf02b41ea9b37988b244ef80583af17baa4a7f0" }
 
 [[package]]
 name = "torchvision"
