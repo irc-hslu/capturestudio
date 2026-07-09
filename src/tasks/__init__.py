@@ -51,7 +51,7 @@ app.conf.update(
     worker_prefetch_multiplier=1,  # important for long tasks
     worker_enable_remote_control=False,
     task_track_started=True,
-    task_soft_time_limit=5400,  # 90 min
+    task_soft_time_limit=10800,  # 180 min
     task_time_limit=21600,  # 6 hours
     imports=(
         "tasks.download",
