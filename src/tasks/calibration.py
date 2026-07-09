@@ -2180,10 +2180,10 @@ def generate_caliscope_config(capturestudio_cache_root: str, rotate: Optional[Li
     caliscope_dir = capturestudio_cache_root / '__calib__' / 'caliscope'
     caliscope_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) Generate caliscope configuration file
-    config_path = caliscope_dir / 'config.toml'
-    if not config_path.exists():
-        config = {}
+    # 1) camera_array.toml
+    cam_array_file = caliscope_dir / 'camera_array.toml'
+    if not cam_array_file.exists():
+        cam_array_config = {}
 
         # Load camera profiles
         cam_count = 0
@@ -2250,15 +2250,11 @@ def generate_caliscope_config(capturestudio_cache_root: str, rotate: Optional[Li
                 )
                 first_frame_size_hw = (new_h, new_w)
 
-            config[f'cam_{cam_idx_s1}'] = dict(
-                port=cam_idx_s1,
+            cam_array_config[f'cameras.{cam_idx_s1}'] = dict(
+                cam_id=cam_idx_s1,
                 physical_index=cam_idx_s1 - 1,
-                serial_number=f'SERIAL_NUMBER_{cam_idx_s1}',  # dummy
                 rotation_count=0,
                 error=0.01,
-                translation='null',
-                rotation='null',
-                exposure='null',
                 grid_count=20,
                 size=(first_frame_size_hw[1], first_frame_size_hw[0]),  # width, height
                 matrix=color_intri.tolist(),  # 3x3 list
@@ -2266,6 +2262,13 @@ def generate_caliscope_config(capturestudio_cache_root: str, rotate: Optional[Li
             )
             cam_count += 1
 
+        with open(cam_array_file, mode="w") as f:
+            toml.dump(cam_array_config, f)
+        log(f"[calibration::generate_caliscope_config] Generated camera config file at {cam_array_file}", 'debug')
+
+    # 2) Targets / intrinsic_charuco.toml
+    Path(caliscope_dir / 'calibration' / 'targets').mkdir(parents=True, exist_ok=True)
+    if not (caliscope_dir / 'calibration' / 'targets' / 'intrinsic_charuco.toml').is_file():
         # Load charuco profile
         if (capturestudio_cache_root / 'orbbec' / 'session_metadata.json').exists():
             with open(capturestudio_cache_root / 'orbbec' / 'session_metadata.json', 'r') as fp:
@@ -2276,19 +2279,21 @@ def generate_caliscope_config(capturestudio_cache_root: str, rotate: Optional[Li
         with open(PathUtils.resources_path() / 'calibration_patterns' / calibration_pattern / 'charuco_info.json', 'r') as fp:
             charuco_profile = json.load(fp)
 
-        # Generate config file using intrinsic and distortion parameters
-        with open(config_path, 'w') as fp:
-            toml.dump(
-                dict(
-                    camera_count=cam_count,
-                    creation_date=datetime.now().isoformat(),
-                    save_tracked_points_video=True,
-                    **OrderedDict(sorted(config.items(), key=lambda x: int(x[0].split('_')[1]))),
-                    charuco=charuco_profile,
-                ),
-                fp
-            )
-        log(f"[calibration.generate_caliscope_config] Caliscope configuration file generated to {config_path}", 'debug')
+        # Generate cam_array_config file using intrinsic and distortion parameters
+        with open(caliscope_dir / 'calibration' / 'targets' / 'intrinsic_charuco.toml', 'w') as fp:
+            toml.dump(charuco_profile, fp)
+        log(f"[calibration.generate_caliscope_config] Charuco configuration file generated to {caliscope_dir / 'calibration' / 'targets' / 'intrinsic_charuco.toml'}", 'debug')
+
+    # 3) Targets / config.toml
+    if not (caliscope_dir / 'calibration' / 'targets' / 'config.toml').is_file():
+        targets_config = dict(
+            intrinsic_target_type="charuco",
+            extrinsic_target_type="charuco",
+            extrinsic_charuco_same_as_intrinsic=True
+        )
+        with open(caliscope_dir / 'calibration' / 'targets' / 'config.toml', 'w') as f:
+            toml.dump(targets_config, f)
+        log(f"[calibration.generate_caliscope_config] targets/config.toml generated to {caliscope_dir / 'calibration' / 'targets' / 'config.toml'}", 'debug')
 
     return True
 
@@ -2330,7 +2335,7 @@ def generate_caliscope_videos(capturestudio_cache_root: str, cam_name: str, star
     assert cam_color_dir.exists() and cam_color_dir.is_dir(), f"Color directory {cam_color_dir} does not exist"
     if total_frames < 0:
         total_frames = len(list(cam_color_dir.glob('*.jpg'))) - start_offset
-    video_path = extrinsic_videos_dir / f'port_{cam_idx_s1}.mp4'
+    video_path = extrinsic_videos_dir / f'cam_{cam_idx_s1}.mp4'
     if video_path.exists() and PathUtils.verify_file(video_path):
         log(f"[calibration.generate_caliscope_videos] \tCaliscope video already exists at {video_path}. Skipping video generation.", 'debug')
         return True
@@ -2341,5 +2346,5 @@ def generate_caliscope_videos(capturestudio_cache_root: str, cam_name: str, star
     # move to extrinsic_videos_dir
     shutil.move(written_video_path, video_path)
     # copy to intrinsic_videos_dir
-    shutil.copy(extrinsic_videos_dir / f'port_{cam_idx_s1}.mp4', intrinsic_videos_dir / f'port_{cam_idx_s1}.mp4')
+    shutil.copy(extrinsic_videos_dir / f'cam_{cam_idx_s1}.mp4', intrinsic_videos_dir / f'cam_{cam_idx_s1}.mp4')
     return True

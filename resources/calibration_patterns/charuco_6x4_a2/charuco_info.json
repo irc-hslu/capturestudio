@@ -5,8 +5,8 @@
   "board_width": 42.0,
   "dictionary": "DICT_4X4_50",
   "units": "cm",
-  "aruco_scale": 0.75,
-  "square_size_overide_cm": 10.0,
+  "aruco_scale": 0.74,
+  "square_size_override_cm": 9.5,
   "inverted": false,
   "legacy_pattern": false
 }
