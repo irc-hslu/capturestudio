@@ -12,6 +12,8 @@ import trimesh
 from tqdm import tqdm
 
 from reconstruction.data.capturestudio import MultiSessionDataset
+from reconstruction.merging.blendpcr import blend_point_cloud
+from reconstruction.merging.depth_fusion import fuse_depth_maps
 from reconstruction.primitive.pcd import RGBDImage
 from reconstruction.primitive.splat import GSImage
 from reconstruction.vis.teaser.base import (
@@ -23,8 +25,6 @@ from reconstruction.vis.teaser.base import (
     TeaserGenerator,
     TeaserGeneratorRenderConfig
 )
-from reconstruction.vis.teaser.blendpcr import blend_point_cloud
-from reconstruction.vis.teaser.depth_fusion import fuse_depth_maps
 from utils.misc import log
 
 

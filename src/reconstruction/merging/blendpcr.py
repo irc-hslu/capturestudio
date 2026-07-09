@@ -5,16 +5,16 @@ from typing import Sequence, Optional, Literal
 import numpy as np
 import open3d as o3d
 
-from reconstruction.primitive.pcd import RGBDImage
-from reconstruction.vis.teaser.gco_nonrigid import (
+from reconstruction.merging.gco_nonrigid import (
     FastGCOTemporalCache,
     warp_view_to_reference_fast,
 )
-from reconstruction.vis.teaser.ndp_rgbd_adapter import (
+from reconstruction.merging.ndp_rgbd_adapter import (
     NDPConfig,
     NDPTTemporalCache,
     warp_view_to_reference_ndp,
 )
+from reconstruction.primitive.pcd import RGBDImage
 
 _NDP_CACHE = NDPTTemporalCache()
 _GCO_CACHE = FastGCOTemporalCache()
