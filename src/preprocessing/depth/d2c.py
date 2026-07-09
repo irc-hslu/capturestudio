@@ -9,7 +9,7 @@ from utils.misc import PathUtils
 
 
 @torch.no_grad()
-def align_depth_to_color_for_cam(depth_dir: str, out_dir: str, parameters_dir: str, color_size_hw: Tuple[int, int], start_offset: int = 0, total_frames: int = -1, depth_format: Literal['npy', 'png'] = 'png', force: bool = False, celery_app=None):
+def align_depth_to_color_for_cam(depth_dir: str, out_dir: str, parameters_dir: str, start_offset: int = 0, total_frames: int = -1, depth_format: Literal['npy', 'png'] = 'png', force: bool = False, celery_app=None):
     """
     Aligns color frames to depth frames for a given session.
 
@@ -36,8 +36,8 @@ def align_depth_to_color_for_cam(depth_dir: str, out_dir: str, parameters_dir: s
     out_dir: Path = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     parameters_dir = Path(parameters_dir)
-    # color_dir = depth_dir.parent / 'color'
-    # color_size_hw = PathUtils.read_file(Path(str(next(iter(color_dir.glob('*.jpg')))))).shape[:2]
+    color_dir = depth_dir.parent / 'color'
+    color_size_hw = PathUtils.read_file(Path(str(next(iter(color_dir.glob('*.jpg')))))).shape[:2]
 
     # align depth frames to color frames
     depth_dir: Path = Path(depth_dir)
