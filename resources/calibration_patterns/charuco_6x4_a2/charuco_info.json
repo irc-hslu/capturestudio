@@ -1,11 +1,11 @@
 {
   "columns": 4,
   "rows": 6,
-  "board_height": 59.3,
-  "board_width": 42.0,
+  "board_height": 57.5,
+  "board_width": 38.3,
   "dictionary": "DICT_4X4_50",
   "units": "cm",
-  "aruco_scale": 0.74,
+  "aruco_scale": 0.7368,
   "square_size_override_cm": 9.5,
   "inverted": false,
   "legacy_pattern": false
