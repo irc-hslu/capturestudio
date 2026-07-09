@@ -1,7 +1,6 @@
 import os
 import shutil
 import struct
-from bisect import bisect_right, bisect_left
 from pathlib import Path
 from typing import Dict, Optional, List, Union, Tuple
 
@@ -10,100 +9,256 @@ from utils.misc import log
 
 class SyncUtils:
     @classmethod
-    def generate_multisync_info(cls, capture_path: str, max_clusters: int = 100_000):
+    def generate_multisync_info(
+            cls,
+            capture_path: str,
+            hosts: Optional[Dict[int, Dict[str, Union[List[int], int, float, bool]]]] = None,
+            tolerance_ms: int = 15,
+            max_clusters: int = 100_000,
+            info_name: str = 'multi_sync.info',
+            force: bool = False,
+    ):
         """
-        Build multi-camera synchronization info file from color frames.
+        Generate Orbbec multi-sync info using host-corrected (virtual) timestamps.
 
-        Parameters
-        ----------
-        capture_path: str
-            Path to the capture session root directory, e.g. "/mnt/fdata/CAPTURESTUDIO_CACHE/Thanos_2_Perf_1".
-        max_clusters: int, optional
-            Maximum number of clusters to write to the info file (default: 100K). A cluster holds the frame timestamps for all frames corresponding to a single point in wall clock time.
+        Host correction:
+
+            virtual_ts = raw_ts + offset_ms + drift_ms
+
+        where:
+
+            drift_ms = round((raw_ts - drift_anchor_ts) * drift_ppm / 1_000_000)
+
+        hosts example:
+
+            {
+                0: {"cams": [1, 2, 4], "offset_ms": 0, "is_master": True},
+                1: {"cams": [3, 5], "offset_ms": -1149},
+            }
+
+        The binary record stores raw_ts and write_idx, to be loaded by load_multisync_info().
+        Clustering uses virtual_ts.
         """
         capture_path = Path(capture_path)
-        if (capture_path / 'multi_sync.info').exists():
-            return None
+        orbbec_path = capture_path / 'orbbec'
+        info_path = orbbec_path / info_name
 
-        # collect timestamps and paths for each camera
-        per_cam_ts, per_cam_frame_count = [], []
-        all_cam_dirs = sorted([d for d in (capture_path / 'orbbec').iterdir() if d.is_dir() and d.name.startswith('cam')], key=lambda d: int(d.name.split('cam')[1].split(' ')[0]))
-        for cam_dir in all_cam_dirs:
-            ts_list = []
-            paths = sorted((cam_dir / 'color').glob('*.jpg'), key=lambda path: int(path.stem))
-            frame_count = 0
-            for p in paths:
-                ts_list.append((int(p.stem), (p, p.stem, frame_count)))
-                frame_count += 1
-            per_cam_ts.append(ts_list)
-            per_cam_frame_count.append(frame_count)
-        # perform multi-camera synchronization
+        assert orbbec_path.exists(), f"Missing Orbbec root: {orbbec_path}"
+        assert tolerance_ms >= 0, f"Invalid tolerance_ms={tolerance_ms}"
+        assert max_clusters > 0, f"Invalid max_clusters={max_clusters}"
+
+        cam_dirs = sorted(
+            [d for d in orbbec_path.iterdir() if d.is_dir() and d.name.startswith('cam')],
+            key=lambda d: int(d.name.split('cam')[1].split()[0]),
+        )
+        assert cam_dirs, f"No camXX folders found in {orbbec_path}"
+
+        cam_indices = [
+            int(d.name.split('cam')[1].split()[0])
+            for d in cam_dirs
+        ]
+
+        if info_path.exists():
+            if not force:
+                return None
+            info_path.unlink()
+
+        cam_to_host = {}
+        cam_to_offset = {cam_idx: 0 for cam_idx in cam_indices}
+        cam_to_drift_ppm = {cam_idx: 0.0 for cam_idx in cam_indices}
+        cam_to_drift_anchor_ts = {cam_idx: None for cam_idx in cam_indices}
+
+        if hosts is not None:
+            seen = set()
+
+            for host_idx, spec in hosts.items():
+                assert 'cams' in spec, f"hosts[{host_idx}] missing 'cams'"
+
+                host_idx = int(host_idx)
+                offset_ms = int(spec.get('offset_ms', 0))
+                drift_ppm = float(spec.get('drift_ppm', 0.0))
+                drift_anchor_ts = spec.get('drift_anchor_ts', None)
+
+                if drift_ppm != 0.0:
+                    assert drift_anchor_ts is not None, (
+                        f"hosts[{host_idx}] has drift_ppm={drift_ppm} but no drift_anchor_ts."
+                    )
+                    drift_anchor_ts = int(drift_anchor_ts)
+
+                for cam_idx in spec['cams']:
+                    cam_idx = int(cam_idx)
+
+                    assert cam_idx in cam_indices, f"cam{cam_idx} from hosts[{host_idx}] not found."
+                    assert cam_idx not in seen, f"cam{cam_idx} appears in multiple hosts."
+
+                    seen.add(cam_idx)
+                    cam_to_host[cam_idx] = host_idx
+                    cam_to_offset[cam_idx] = offset_ms
+                    cam_to_drift_ppm[cam_idx] = drift_ppm
+                    cam_to_drift_anchor_ts[cam_idx] = drift_anchor_ts
+
+            missing = sorted(set(cam_indices) - seen)
+            assert not missing, f"These cameras are missing from hosts: {missing}"
+
+        events = []
+
+        for cam_dir in cam_dirs:
+            cam_idx = int(cam_dir.name.split('cam')[1].split()[0])
+            offset_ms = int(cam_to_offset[cam_idx])
+            drift_ppm = float(cam_to_drift_ppm[cam_idx])
+            drift_anchor_ts = cam_to_drift_anchor_ts[cam_idx]
+
+            color_paths = sorted((cam_dir / 'color').glob('*.jpg'), key=lambda p: int(p.stem))
+
+            for write_idx, p in enumerate(color_paths):
+                raw_ts = int(p.stem)
+
+                drift_ms = 0
+                if drift_ppm != 0.0:
+                    drift_ms = int(round((raw_ts - int(drift_anchor_ts)) * drift_ppm / 1_000_000.0))
+
+                virtual_ts = int(raw_ts + offset_ms + drift_ms)
+                assert virtual_ts >= 0, (
+                    f"Negative virtual timestamp for cam{cam_idx}: "
+                    f"raw_ts={raw_ts}, offset_ms={offset_ms}, drift_ms={drift_ms}, "
+                    f"virtual_ts={virtual_ts}"
+                )
+
+                events.append({
+                    'cam_idx': int(cam_idx),
+                    'raw_ts': int(raw_ts),
+                    'virtual_ts': int(virtual_ts),
+                    'write_idx': int(write_idx),
+                    'path': p,
+                })
+
+            log(
+                f"[SyncUtils::generate_multisync_info] cam{cam_idx:02d}: "
+                f"frames={len(color_paths)}, "
+                f"host={cam_to_host.get(cam_idx, None)}, "
+                f"offset_ms={offset_ms}, "
+                f"drift_ppm={drift_ppm}, "
+                f"drift_anchor_ts={drift_anchor_ts}",
+                'debug',
+            )
+
+        events = sorted(events, key=lambda e: (e['virtual_ts'], e['cam_idx'], e['raw_ts']))
+
         clusters = []
-        unflushed = []
-        for cam_name, ts_list in zip([_.name for _ in all_cam_dirs], per_cam_ts):
-            cam_idx = int(cam_name.split(' ')[0].replace('cam', ''))
-            for ts, info in ts_list:
-                if not clusters:
-                    clusters.append({'min_ts': ts, 'max_ts': ts, 'members': {cam_idx: info}, 'flushed': False})
-                    unflushed.append(0)
-                    continue
-                last_idx = len(clusters) - 1
-                last = clusters[last_idx]
-                if ts > last['max_ts'] + 15:
-                    cutoff = ts - 15
-                    to_flush = [i for i in unflushed if clusters[i]['max_ts'] < cutoff]
-                    for i in sorted(to_flush):
-                        unflushed.remove(i)
-                        clusters[i]['flushed'] = True
-                    clusters.append({'min_ts': ts, 'max_ts': ts, 'members': {cam_idx: info}, 'flushed': False})
-                    unflushed.append(len(clusters) - 1)
-                else:
-                    if (last['min_ts'] - 15) <= ts <= (last['max_ts'] + 15):
-                        last['members'][cam_idx] = info
-                        if ts < last['min_ts']:
-                            last['min_ts'] = ts
-                        if ts > last['max_ts']:
-                            last['max_ts'] = ts
-                    else:
-                        placed = False
-                        for i in range(last_idx - 1, -1, -1):
-                            cl = clusters[i]
-                            if cam_idx in cl['members']:
-                                continue
-                            if (cl['min_ts'] - 15) <= ts <= (cl['max_ts'] + 15):
-                                cl['members'][cam_idx] = info
-                                if ts < cl['min_ts']:
-                                    cl['min_ts'] = ts
-                                if ts > cl['max_ts']:
-                                    cl['max_ts'] = ts
-                                placed = True
-                                break
-                        if not placed:
-                            insert_i = bisect_right([c['min_ts'] for c in clusters], ts)
-                            clusters.insert(insert_i, {'min_ts': ts, 'max_ts': ts, 'members': {cam_idx: info}, 'flushed': False})
-                            unflushed = [u + 1 if u >= insert_i else u for u in unflushed] + [insert_i]
+        active = []
 
-        # create file bytes
+        for e in events:
+            ts = int(e['virtual_ts'])
+            cam_idx = int(e['cam_idx'])
+
+            active = [
+                ci for ci in active
+                if clusters[ci]['max_ts'] >= ts - tolerance_ms
+            ]
+
+            best_ci = None
+            best_key = None
+
+            for ci in active:
+                cl = clusters[ci]
+
+                if cam_idx in cl['members']:
+                    continue
+
+                new_min = min(int(cl['min_ts']), ts)
+                new_max = max(int(cl['max_ts']), ts)
+                spread = new_max - new_min
+
+                if spread > tolerance_ms:
+                    continue
+
+                key = (
+                    spread,
+                    -len(cl['members']),
+                    abs(ts - ((int(cl['min_ts']) + int(cl['max_ts'])) * 0.5)),
+                )
+
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_ci = ci
+
+            if best_ci is None:
+                clusters.append({
+                    'min_ts': ts,
+                    'max_ts': ts,
+                    'members': {
+                        cam_idx: e,
+                    },
+                })
+                active.append(len(clusters) - 1)
+            else:
+                cl = clusters[best_ci]
+                cl['members'][cam_idx] = e
+                cl['min_ts'] = min(int(cl['min_ts']), ts)
+                cl['max_ts'] = max(int(cl['max_ts']), ts)
+
+        for ci, cl in enumerate(clusters[:max_clusters]):
+            vals = [int(e['virtual_ts']) for e in cl['members'].values()]
+            spread = max(vals) - min(vals)
+
+            assert spread <= tolerance_ms, (
+                f"Invalid virtual cluster {ci}: spread={spread}, tolerance={tolerance_ms}, "
+                f"members={{{', '.join([str(k) + ': raw=' + str(v['raw_ts']) + ', virtual=' + str(v['virtual_ts']) for k, v in sorted(cl['members'].items())])}}}"
+            )
+
         payload = bytearray()
-        cnt = 0
+        written_clusters = 0
+
         for cl in clusters:
-            payload += struct.pack('QQI', int(cl['min_ts']), int(cl['max_ts']), len(cl['members']))
-            for cam in sorted(cl['members'].keys()):
-                p, ts_val, write_idx = cl['members'][cam]
-                # print('write_idx', write_idx, 'ts_val', ts_val, 'cam', cam, 'p', p)
-                payload += struct.pack('IQQ', int(cam), int(ts_val), int(write_idx))
-            cnt += 1
-            if cnt >= max_clusters:
+            if written_clusters >= max_clusters:
                 break
-        # write the payload to file
-        with open(capture_path / 'orbbec' / 'multi_sync.info', 'wb') as f:
-            f.write(payload)  # single write
-            f.flush()  # empty kernel buffers
-            os.fsync(f.fileno())  # write to disk
+
+            payload += struct.pack(
+                'QQI',
+                int(cl['min_ts']),
+                int(cl['max_ts']),
+                len(cl['members']),
+            )
+
+            for cam_idx in sorted(cl['members'].keys()):
+                e = cl['members'][cam_idx]
+
+                payload += struct.pack(
+                    'IQQ',
+                    int(cam_idx),
+                    int(e['raw_ts']),
+                    int(e['write_idx']),
+                )
+
+            written_clusters += 1
+
+        info_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(info_path, 'wb') as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+
+        full_clusters = sum(
+            1
+            for cl in clusters[:written_clusters]
+            if sorted(cl['members'].keys()) == sorted(cam_indices)
+        )
+
+        log(
+            f"[SyncUtils::generate_multisync_info] wrote {info_path}: "
+            f"clusters={written_clusters}/{len(clusters)}, "
+            f"full_clusters={full_clusters}, "
+            f"cams={cam_indices}, "
+            f"hosts={'yes' if hosts is not None else 'no'}, "
+            f"tolerance_ms={tolerance_ms}",
+            'info',
+        )
+
         return None
 
     @classmethod
-    def load_multisync_info(cls, capture_path: str) -> List[Dict[str, Union[int, Dict[int, Tuple[Path, str, int]]]]]:
+    def load_multisync_info(cls, capture_path: str, file_stem: str = 'multi_sync') -> List[Dict[str, Union[int, Dict[int, Tuple[Path, str, int]]]]]:
         """
         Load multi-sync info from file.
 
@@ -111,6 +266,8 @@ class SyncUtils:
         ----------
         capture_path: str
             Path to the capture session root directory, e.g. "/mnt/fdata/CAPTURESTUDIO_CACHE/Thanos_2_Perf_1".
+        file_stem: str
+            Stem of the file to be loaded. Default: "multi_sync" (so the file to be loaded is "multi_sync.info").
 
         Returns
         -------
@@ -122,7 +279,7 @@ class SyncUtils:
                 or (timestamp, write_index) if not raw.
         """
         capture_path = Path(capture_path)
-        if not (capture_path / 'multi_sync.info').exists():
+        if not (capture_path / f'{file_stem}.info').exists():
             cls.generate_multisync_info(str(capture_path))
 
         metadata_size = struct.calcsize('QQI')  # min_ts, max_ts, num_cams
@@ -135,11 +292,11 @@ class SyncUtils:
             for cam_dir, cam_name_int in zip(all_cam_dirs, all_cam_names_int)
         }
         depth_paths = {
-            cam_name_int: sorted(list((cam_dir / 'depth').glob('*.npy' if len(list((cam_dir / 'depth').glob('*.npy'))) > 0 else '.png')), key=lambda p: int(p.stem)) if (cam_dir / 'depth').exists() else []
+            cam_name_int: sorted(list((cam_dir / 'depth').glob('*.npy' if len(list((cam_dir / 'depth').glob('*.npy'))) > 0 else '*.png')), key=lambda p: int(p.stem)) if (cam_dir / 'depth').exists() else []
             for cam_dir, cam_name_int in zip(all_cam_dirs, all_cam_names_int)
         }
         cluster_records = []
-        with open(capture_path / 'orbbec' / 'multi_sync.info', 'rb') as f:
+        with open(capture_path / 'orbbec' / f'{file_stem}.info', 'rb') as f:
             while True:
                 metadata_packed = f.read(metadata_size)
                 if not metadata_packed:
@@ -321,7 +478,6 @@ class SyncUtils:
                                 folder_file_path.unlink()  # remove processed files corresponding to the unsynced depth frame
         return None
 
-
     @classmethod
     def synchronize_frames_using_timestamps(cls, capture_path: str):
         clusters = cls.load_multisync_info(capture_path)
@@ -377,3 +533,29 @@ class SyncUtils:
             for cam_dir in orbbec_cam_dirs:
                 cls.move_unsynced_frames_by_first_and_last_index(cam_dir, first_index=-common_length, last_index=0, color_extension='jpg', rename_instead_of_moving=True)
         return None
+
+
+if __name__ == '__main__':
+    for calib_, offset_ in zip([1, 2], [-1149, -1184]):
+        p_ = f'/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Calib_{calib_}'
+        SyncUtils.generate_multisync_info(
+            p_,
+            hosts={
+                0: {"cams": [1, 2, 4], "offset_ms": 0, "is_master": True},
+                1: {"cams": [3, 5], "offset_ms": offset_},
+            },
+            force=True
+        )
+        SyncUtils.synchronize_frames_using_timestamps(
+            p_
+        )
+        from preprocessing.generate_video import generate_multiview_video
+
+        generate_multiview_video(
+            p_,
+            'color', 'jpg'
+        )
+        generate_multiview_video(
+            p_,
+            'depth', 'png'
+        )
