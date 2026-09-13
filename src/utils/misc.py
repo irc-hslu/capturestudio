@@ -789,6 +789,7 @@ def get_detector(which: Literal['yolo', 'sam3'] = 'sam3', device: Union[str, Lit
                     "guitar",
                     "guitar band",
                     "drums",
+                    "chair",
                 ]
                 model._class_names = {i: n for i, n in enumerate(sam3_class_list)}
                 DETECTORS[which] = model
