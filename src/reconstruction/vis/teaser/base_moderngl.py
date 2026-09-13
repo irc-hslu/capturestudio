@@ -877,7 +877,7 @@ class TeaserGeneratorModernGL(TeaserGenerator):
 if __name__ == "__main__":
     # @formatter:off
     DATA = [
-        ("Cagliari_1_Perf_7", "Cagliari_1_Calib_6", 0, list(range(1, 8))),
+        ("Cagliari_2_5cams_Perf_1", "Cagliari_2_5cams_Calib_2", 500, list(range(1, 8))),
     ]
     # @formatter:on
     DEBUG = False

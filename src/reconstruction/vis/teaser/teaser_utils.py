@@ -4,7 +4,7 @@ from pathlib import Path
 os.environ['IMAGEMAGICK_BINARY'] = '/usr/bin/convert'
 
 import numpy as np
-from moviepy.editor import (
+from moviepy import (
     VideoFileClip,
     VideoClip,
     vfx,
@@ -22,13 +22,11 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
 
     def grid(h, w):
         x, y = np.meshgrid(np.arange(w), np.arange(h))
-        s = (w - 1 - x) + y                    # 0 @ top-right, L @ bottom-left
+        s = (w - 1 - x) + y  # 0 @ top-right, L @ bottom-left
         return s, (w + h - 2)
-
 
     def ease(t, d):
         return 0.5 * (1 - np.cos(np.pi * np.clip(t / d, 0, 1)))
-
 
     def get_frame_safe(clip, t):
         """Clamp t so we never wrap around."""
@@ -38,9 +36,9 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
     fps = cfg["fps"]
     h_target = cfg["target_height"]
 
-    rgb   = VideoFileClip(cfg["paths"]["rgb"  ]).fx(vfx.resize, height=h_target).set_fps(fps)
-    depth = VideoFileClip(cfg["paths"]["depth"]).fx(vfx.resize, rgb.size      ).set_fps(fps)
-    norm  = VideoFileClip(cfg["paths"]["norm" ]).fx(vfx.resize, rgb.size      ).set_fps(fps)
+    rgb = VideoFileClip(cfg["paths"]["rgb"]).fx(vfx.resize, height=h_target).set_fps(fps)
+    depth = VideoFileClip(cfg["paths"]["depth"]).fx(vfx.resize, rgb.size).set_fps(fps)
+    norm = VideoFileClip(cfg["paths"]["norm"]).fx(vfx.resize, rgb.size).set_fps(fps)
 
     # timeline lengths
     dur = cfg["durations"]
@@ -55,8 +53,8 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
 
     # boundaries from band proportions
     p_rgb = cfg["bands"]["rgb_corner"]
-    p_n   = cfg["bands"]["normal"]
-    p_d   = cfg["bands"]["depth"]
+    p_n = cfg["bands"]["normal"]
+    p_d = cfg["bands"]["depth"]
 
     B1, B2, B3 = p_rgb * L, (p_rgb + p_n) * L, (p_rgb + p_n + p_d) * L
 
@@ -70,7 +68,7 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
         def wrapped(t):
             return fn(t, t + t0).astype("uint8")
 
-        return VideoClip(wrapped, duration=dur).set_fps(fps)
+        return VideoClip(wrapped, duration=dur).with_fps(fps)
 
     # ── Phase A : RGB only ─────────────────────────────────────────── #
     phases.append(rgb.subclip(0, dA))
@@ -111,14 +109,14 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
 
         m_rgb_tr = s < b_top
         m_rgb_bl = s >= b_bot
-        m_depth  = (s >= b_dep) & (s < b_bot)
-        m_norm   = ~(m_rgb_tr | m_rgb_bl | m_depth)
+        m_depth = (s >= b_dep) & (s < b_bot)
+        m_norm = ~(m_rgb_tr | m_rgb_bl | m_depth)
 
         return (
-            m_rgb_tr[..., None] * get_frame_safe(rgb, tg)
-            + m_rgb_bl[..., None] * get_frame_safe(rgb, tg)
-            + m_depth [..., None] * get_frame_safe(depth, tg)
-            + m_norm  [..., None] * get_frame_safe(norm, tg)
+                m_rgb_tr[..., None] * get_frame_safe(rgb, tg)
+                + m_rgb_bl[..., None] * get_frame_safe(rgb, tg)
+                + m_depth[..., None] * get_frame_safe(depth, tg)
+                + m_norm[..., None] * get_frame_safe(norm, tg)
         )
 
     phases.append(mkclip(dD, fD))
@@ -128,13 +126,13 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
     def fE(_, tg):
         m_rgb_tr = s < B1
         m_rgb_bl = s >= B3
-        m_depth  = (s >= B2) & (s < B3)
-        m_norm   = (s >= B1) & (s < B2)
+        m_depth = (s >= B2) & (s < B3)
+        m_norm = (s >= B1) & (s < B2)
 
         return (
-            (m_rgb_tr | m_rgb_bl)[..., None] * get_frame_safe(rgb, tg)
-            + m_depth[..., None] * get_frame_safe(depth, tg)
-            + m_norm [..., None] * get_frame_safe(norm, tg)
+                (m_rgb_tr | m_rgb_bl)[..., None] * get_frame_safe(rgb, tg)
+                + m_depth[..., None] * get_frame_safe(depth, tg)
+                + m_norm[..., None] * get_frame_safe(norm, tg)
         )
 
     phases.append(mkclip(dE, fE))
@@ -147,14 +145,14 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
         b2 = b1 + (1 - q) * p_n * L
         b3 = b2 + (1 - q) * p_d * L
 
-        m_norm  = (s >= b1) & (s < b2)
+        m_norm = (s >= b1) & (s < b2)
         m_depth = (s >= b2) & (s < b3)
-        m_rgb   = ~(m_norm | m_depth)
+        m_rgb = ~(m_norm | m_depth)
 
         return (
-            m_rgb  [..., None] * get_frame_safe(rgb, tg)
-            + m_depth[..., None] * get_frame_safe(depth, tg)
-            + m_norm [..., None] * get_frame_safe(norm, tg)
+                m_rgb[..., None] * get_frame_safe(rgb, tg)
+                + m_depth[..., None] * get_frame_safe(depth, tg)
+                + m_norm[..., None] * get_frame_safe(norm, tg)
         )
 
     phases.append(mkclip(dF, fF))
@@ -169,6 +167,7 @@ def create_teaser_rgb_depth_normals_video(cfg, force=False):
         threads=4,
     )
 
+
 def create_teaser_grid(cfg, force=False):
     if Path(cfg["output"]).exists() and not force:
         log(f"Teaser grid video {cfg['output']} already exists. Skipping creation.", 'debug')
@@ -181,7 +180,7 @@ def create_teaser_grid(cfg, force=False):
         """
         from PIL import Image, ImageDraw, ImageFont
         import numpy as np
-        from moviepy.editor import ImageClip, CompositeVideoClip
+        from moviepy import ImageClip, CompositeVideoClip
 
         # 1. Pick a font (or default)
         try:
@@ -192,7 +191,7 @@ def create_teaser_grid(cfg, force=False):
         # 2. Render the text on a small RGBA canvas
         pad = 6
         bbox = font.getbbox(txt)
-        w_txt, h_txt = bbox[2] - bbox[0], bbox[3] - bbox[1]+4
+        w_txt, h_txt = bbox[2] - bbox[0], bbox[3] - bbox[1] + 4
         canvas = Image.new("RGBA", (int(w_txt + 2 * pad), int(h_txt + 2 * pad)), (0, 0, 0, 0))
         draw = ImageDraw.Draw(canvas)
 
@@ -208,7 +207,7 @@ def create_teaser_grid(cfg, force=False):
         # 3. Convert to an ImageClip with the same duration as the base clip
         txt_clip = (
             ImageClip(np.array(canvas))
-            .set_duration(base_clip.duration)
+            .with_duration(base_clip.duration)
             .set_position(("left", "top"))
         )
 
@@ -219,7 +218,7 @@ def create_teaser_grid(cfg, force=False):
     fps = cfg["fps"]
 
     # ── 1. Load all six clips ──────────────────────────────────────────
-    clips = [VideoFileClip(p).set_fps(fps) for p in cfg["paths"]]
+    clips = [VideoFileClip(p).with_fps(fps) for p in cfg["paths"]]
 
     # All clips should play the same length in a grid.
     # You can choose min(...) to clip the longer ones, or max(...) and .loop() the shorter ones.
@@ -243,8 +242,11 @@ def create_teaser_grid(cfg, force=False):
     elif len(clips) == 6:
         grid = clips_array([[clips[0], clips[1], clips[2]],
                             [clips[3], clips[4], clips[5]]])
-    elif len(clips) <=5:
+    elif len(clips) <= 5:
         grid = clips_array([clips])
+
+    else:
+        raise Exception(f"Invalid number of clips: {len(clips)}")
 
     # ── 4. Export ─────────────────────────────────────────────────────
     grid.write_videofile(
@@ -265,7 +267,7 @@ if __name__ == "__main__":
                 MODALITY_ = f'stereo{"+gs" if MODALITY_ == "gs" else ""}_split'
             else:
                 PREFIX_ = DEPTH_
-            out_path_ = PathUtils().out_path() / 'results' / 'pcd' /  f"teaser_{MODALITY_}_{PREFIX_}.mp4"
+            out_path_ = PathUtils().out_path() / 'results' / 'pcd' / f"teaser_{MODALITY_}_{PREFIX_}.mp4"
             cfg_ = {
                 # source files
                 "paths": {
@@ -301,7 +303,7 @@ if __name__ == "__main__":
             create_teaser_rgb_depth_normals_video(cfg_)
             if out_path_.exists():
                 video_paths_.append(out_path_)
-                labels_.append(f'{MODALITY_} {PREFIX_}'.replace("_split","").replace("_", " ").upper())
+                labels_.append(f'{MODALITY_} {PREFIX_}'.replace("_split", "").replace("_", " ").upper())
 
     GRID_CFG = {
         # Six input videos, row-major order: [row0-col0, row0-col1, …]
@@ -321,7 +323,7 @@ if __name__ == "__main__":
         "stroke_width": 0,
 
         # Output file & encoding
-        "output": str(PathUtils().out_path() / 'results' / 'pcd' /  f"teaser_grid.mp4"),
+        "output": str(PathUtils().out_path() / 'results' / 'pcd' / f"teaser_grid.mp4"),
         "fps": 30,
         "bitrate": "15M",
     }

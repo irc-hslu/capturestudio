@@ -3,7 +3,7 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/annotator" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/resources/submodules/caliscope" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/resources/submodules/foundationstereo" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/resources/submodules/videoflow" vcs="Git" />
   </component>
 </project>

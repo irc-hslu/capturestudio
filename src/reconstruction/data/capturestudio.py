@@ -25,7 +25,8 @@ class SingleSessionDataset(Dataset):
                  depth_filter: Optional[Literal['aligned', 'bilateral_spatial', 'bilateral_temporal']] = 'bilateral_spatial',
                  transforms: Optional[List[Callable]] = None,
                  return_of: bool = False,
-                 rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None):
+                 rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None,
+                 use_color_luts: bool = True):
         self.session_root = Path(session_root)
         self.session_name = self.session_root.name
         self.cam_indices = cam_indices
@@ -52,6 +53,26 @@ class SingleSessionDataset(Dataset):
 
         self.return_of = return_of
         self.rotate = rotate
+        self.use_color_luts = use_color_luts
+        self.color_luts = {}
+        if self.use_color_luts:
+            lut_dirs = [
+                self.session_root / 'color_luts',
+                self.session_root / 'orbbec' / 'color_luts',
+            ]
+            for cam_idx in self.cam_indices:
+                for lut_dir in lut_dirs:
+                    lut_path = lut_dir / f'cam_{int(cam_idx):02d}.lut'
+                    if not lut_path.exists():
+                        continue
+                    lut = np.load(str(lut_path))
+                    assert lut.shape == (256, 256, 256, 3) and lut.dtype == np.uint8, f"Invalid color LUT {lut_path}: shape={lut.shape}, dtype={lut.dtype}"
+                    self.color_luts[int(cam_idx)] = lut
+                    log(f'[{self.__class__.__name__}::__init__] Loaded color LUT for cam{int(cam_idx):02d}: {lut_path}', 'debug')
+                    break
+            missing_luts = [int(cam_idx) for cam_idx in self.cam_indices if int(cam_idx) not in self.color_luts]
+            if len(self.color_luts) > 0 and len(missing_luts) > 0:
+                log(f'[{self.__class__.__name__}::__init__] Missing color LUTs for cams {missing_luts}; those cameras will be used uncorrected.', 'warning')
 
         # assert all(len(depth_files) == len(self.depth_file_paths[0]) for depth_files in self.depth_file_paths), f"All cameras must have the same number of depth files, got {[len(_) for _ in self.depth_file_paths]} cameras with varying file counts."
         # assert len(self.rgb_file_paths) == len(self.depth_file_paths), "Number of RGB and depth cameras must match."
@@ -64,6 +85,7 @@ class SingleSessionDataset(Dataset):
         self.src_image_size_hw = first_src_image.shape[:2]
         self.transforms = transforms if transforms is not None else []
 
+        self._has_mask = True
         self._ensure_segmentation_masks_exist()
         self._depth_dirname = 'depth_aligned' if depth_filter is None or depth_filter == 'aligned' else f'depth_filtering_{depth_filter}'
         log(f'[{self.__class__.__name__}::__init__] Number of frames in dataset: {self.n_frames}', 'info')
@@ -87,9 +109,19 @@ class SingleSessionDataset(Dataset):
         optical_flows = []
         # cam_indices_global = []
         for cam_idx_rel, (cam_idx_global, rgb_path, depth_path) in enumerate(zip(self.cam_indices, rgb_file_paths, depth_file_paths)):
-            rgb_image = cv2.cvtColor(cv2.imread(str(rgb_path)), cv2.COLOR_BGR2RGB)
+            bgr_image = cv2.imread(str(rgb_path))
+            if bgr_image is None:
+                raise cv2.error(f'Failed to read RGB image: {rgb_path}')
+            lut = self.color_luts.get(int(cam_idx_global))
+            if lut is not None:
+                assert bgr_image.dtype == np.uint8 and bgr_image.ndim == 3 and bgr_image.shape[2] == 3, f"Expected uint8 BGR image before LUT for cam{int(cam_idx_global):02d}, got shape={bgr_image.shape}, dtype={bgr_image.dtype}"
+                bgr_image = lut[bgr_image[:, :, 0], bgr_image[:, :, 1], bgr_image[:, :, 2]]
+            rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
             mask_path = Path(str(rgb_path).replace('color', 'mask'))
-            mask_image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            if self._has_mask:
+                mask_image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            else:
+                mask_image = (255 * np.ones(rgb_image.shape[:2], dtype=np.uint8)).astype(np.uint8)
             if depth_path is not None:
                 depth_map = PathUtils.read_file(depth_path, png_type='depth').astype(np.float32) * 1e-3
             else:
@@ -135,10 +167,12 @@ class SingleSessionDataset(Dataset):
         for camera_folder in self.camera_folders:
             mask_folder = camera_folder / 'mask'
             if not mask_folder.exists() or not any(mask_folder.glob('*.jpg')) or len(list(mask_folder.glob('*.jpg'))) < self.n_frames - 1:  # -1 because frame extraction could result in one less frame
-                raise NotImplementedError(
+                log(
                     f"Segmentation masks are missing for camera {camera_folder.name} in session {self.session_name}. "
-                    "Please generate segmentation masks in irc-hslu/capturestudio."
+                    "Please generate segmentation masks in irc-hslu/capturestudio.",
+                    'error'
                 )
+                self._has_mask = False
             elif len(list(mask_folder.glob('*.jpg'))) == self.n_frames - 1:
                 self.n_frames -= 1
 
@@ -181,7 +215,8 @@ class MultiSessionDataset(Dataset):
                  apply_intrinsics_fix: bool = False,
                  is_cam_indices_s0: bool = False,
                  return_of: bool = False,
-                 rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None):
+                 rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None,
+                 use_color_luts: bool = True):
         self.depth_filter = depth_filter
         self.calibration_session_name = calibration_session_name
         self.calibration_method = calibration_method
@@ -200,6 +235,7 @@ class MultiSessionDataset(Dataset):
         self.is_cam_indices_s0 = is_cam_indices_s0
         self.target_image_size_hw = target_image_size_hw
         self.rotate = rotate
+        self.use_color_luts = use_color_luts
         self.use_stereo = use_stereo
         if use_stereo:
             assert n_cams_per_sample in [-1, 2]
@@ -248,7 +284,8 @@ class MultiSessionDataset(Dataset):
                     depth_filter=depth_filter,
                     transforms=self.calibration_data.get_preprocessing_transforms(),
                     return_of=return_of,
-                    rotate=rotate
+                    rotate=rotate,
+                    use_color_luts=use_color_luts
                 )
                 for session_root in self.session_roots
             ]
@@ -449,7 +486,8 @@ class MultiSessionDataset(Dataset):
             apply_intrinsics_fix=self.apply_intrinsics_fix,
             is_cam_indices_s0=self.is_cam_indices_s0,
             return_of=False,
-            rotate=self.rotate
+            rotate=self.rotate,
+            use_color_luts=self.use_color_luts
         )
         first_rgbd_images = DatasetVisualizer.sft_format_to_rgbd_images(ds_with_unfiltered_depth[0])
         # first_pcd = PixelPoints.from_partials(*[_.unproject() for _ in first_rgbd_images]).save_ply(f'/root/capturestudio2/src/{self.session_names[0].split("_")[0].lower()}_first_pcd_stitched.ply')
@@ -485,7 +523,6 @@ class MultiSessionDataset(Dataset):
             from reconstruction.vis.cam_orbit import AudienceViewAnchoredCameraOrbit
             return AudienceViewAnchoredCameraOrbit.from_session(
                 calibration_session=self.calibration_session_name,
-                calibration_method=self.calibration_method,
                 trajectory_idx=self.cam_indices,
                 reconstruction_idx=self.cam_indices,
                 image_size_hw=self.target_image_size_hw,

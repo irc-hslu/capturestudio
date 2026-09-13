@@ -2,6 +2,7 @@ import abc
 from pathlib import Path
 from typing import List, Literal, Union, Iterator, Tuple, Iterable, Dict, Sequence, Optional
 
+import cv2
 import numpy as np
 import torch
 from pytorch3d.renderer import look_at_view_transform
@@ -139,21 +140,91 @@ class CameraOrbit(metaclass=abc.ABCMeta):
             else:
                 yield t_intrinsic, t_extrinsic_c2w, gt_idx_closest, gt_idx_middle
 
-            s += direction * velocity_meters_per_frame  # velocity is distance per frame
+            s += velocity_meters_per_frame
+
             if s >= total_length:
                 if loop:
-                    s = 0
+                    s = 0.0
                 else:
                     s = total_length
-                    direction = -1
-            elif s <= 0:
-                if loop:
-                    s = total_length
-                else:
-                    s = 0
-                    direction = 1
 
-    def export_poses(self, scale: float = 0.4, output_path: Union[Path, str] = 'camera_poses.png', visualize_traversal: bool = False) -> None:
+            # s += direction * velocity_meters_per_frame  # velocity is distance per frame
+            # if s >= total_length:
+            #     if loop:
+            #         s = 0
+            #     else:
+            #         s = total_length
+            #         direction = -1
+            # elif s <= 0:
+            #     if loop:
+            #         s = total_length
+            #     else:
+            #         s = 0
+            #         direction = 1
+
+    def traverse_normalized(
+            self,
+            num_frames: int,
+            num_loops: float = 1.0,
+            endpoint: bool = False,
+            debug_mode: bool = False,
+    ) -> Iterator[Tuple[np.ndarray, np.ndarray, int, int]]:
+        """
+        Traverse the virtual trajectory over exactly num_frames frames.
+
+        Parameters
+        ----------
+        num_frames: int
+            Number of frames to generate.
+        num_loops: int
+            How many full trajectory loops to complete within num_frames.
+            Examples:
+                1.0 -> one full loop
+                2.0 -> two full loops
+                0.5 -> half trajectory
+                3.0 -> three loops
+        endpoint: bool
+            If False, avoids duplicating t=0 at the final frame of an integer loop.
+            This is usually better for videos.
+            If True, includes the final endpoint for non-looping exports.
+        debug_mode: bool
+            If True, yield debug values instead of camera matrices.
+        """
+        num_frames = int(num_frames)
+        num_loops = float(num_loops)
+
+        if num_frames <= 0:
+            return
+
+        if num_frames == 1:
+            t_values = np.array([0.0], dtype=np.float64)
+        else:
+            u = np.linspace(0.0, num_loops, num_frames, endpoint=bool(endpoint))
+            t_values = np.mod(u, 1.0)
+
+            # If this is not a full loop, preserve the final partial endpoint.
+            if not float(num_loops).is_integer():
+                t_values[-1] = num_loops % 1.0
+
+        for t in t_values:
+            t = float(t)
+            closest_virtual_idx = min(int(t * self.num_points), self.num_points - 1)
+
+            t_extrinsic_c2w = np.eye(4)
+            t_extrinsic_c2w[:3, :3] = self._rot_interp(t)
+            t_extrinsic_c2w[:3, 3] = self._t_interp(t)
+
+            t_intrinsic = np.asarray(self.virtual_intrinsic[closest_virtual_idx])
+
+            gt_idx_closest = self._inv_assignment_closest[closest_virtual_idx]
+            gt_idx_middle = self._inv_assignment_middle[closest_virtual_idx] - 1
+
+            if debug_mode:
+                yield t, closest_virtual_idx, gt_idx_closest, gt_idx_middle
+            else:
+                yield t_intrinsic, t_extrinsic_c2w, gt_idx_closest, gt_idx_middle
+
+    def export_poses_bak(self, scale: float = 0.4, output_path: Union[Path, str] = 'camera_poses.png', visualize_traversal: bool = False) -> None:
         import numpy as np
         import open3d as o3d
         from matplotlib import pyplot as plt
@@ -214,7 +285,7 @@ class CameraOrbit(metaclass=abc.ABCMeta):
                 if len(seen) >= self.num_points:
                     break
             assert len(order) > 0, 'No virtual cams yielded during traversal'
-            cmap = plt.cm.get_cmap('viridis')
+            cmap = plt.get_cmap('viridis')
             r0, r1 = scale * 0.05, scale * 0.22
             M = len(order)
             for k, vidx in enumerate(order):
@@ -228,7 +299,7 @@ class CameraOrbit(metaclass=abc.ABCMeta):
                 sph.compute_vertex_normals()
                 scene += sph
         else:
-            cmap = plt.cm.get_cmap('tab20')
+            cmap = plt.get_cmap('tab20')
             n_gt = len(self.gt_extrinsics_c2w)
             color_indices = np.arange(n_gt) % 20
             gt_colors = cmap(color_indices / 19.0)
@@ -261,20 +332,563 @@ class CameraOrbit(metaclass=abc.ABCMeta):
         log(f"[{self.__class__.__name__}::export_poses] Camera poses saved to {output_ply_path.resolve().parent.name}/{output_ply_path.name}", 'debug')
 
         renderer = o3d.visualization.rendering.OffscreenRenderer(1024, 1024)
-        renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
+        renderer.scene.set_background([0.0, 0.0, 0.0, 0.0])
+
         mat = o3d.visualization.rendering.MaterialRecord()
         mat.shader = "defaultLit"
         renderer.scene.add_geometry("scene", scene, mat)
         bounds = scene.get_axis_aligned_bounding_box()
-        center = bounds.get_center().astype(np.float32)
-        extent_len = bounds.get_extent().max()
-        cam_pos = (center + np.array([0.8, 0.8, 0.8]) * extent_len).astype(np.float32)
-        up = np.array([-0.9, -0.6, 0.2], dtype=np.float32)
-        renderer.setup_camera(60.0, center, cam_pos, up)
+        center = bounds.get_center().astype(np.float64)
+        extent = bounds.get_extent().astype(np.float64)
+        extent_len = float(max(extent.max(), 1e-6))
+
+        def _normalize(v: np.ndarray) -> np.ndarray:
+            v = np.asarray(v, dtype=np.float64).reshape(3)
+            return v / (np.linalg.norm(v) + 1e-12)
+
+        def _project_to_plane(v: np.ndarray, n: np.ndarray) -> np.ndarray:
+            v = np.asarray(v, dtype=np.float64).reshape(3)
+            n = _normalize(n)
+            return v - np.dot(v, n) * n
+
+        # BEV viewing direction.
+        # Prefer the estimated floor normal, otherwise use the mean camera up vector.
+        if isinstance(floor_n, np.ndarray):
+            bev_normal = _normalize(floor_n)
+        else:
+            bev_normal = _normalize(self.mean_up_vector)
+        # Make sure BEV camera is above the scene, not below it.
+        mean_up = _normalize(self.mean_up_vector)
+        if np.dot(bev_normal, mean_up) < 0:
+            bev_normal = -bev_normal
+
+        # Screen-up direction for the BEV image.
+        # Use the trajectory direction projected onto the floor plane.
+        traj_dir = (
+                self.virtual_extrinsic_c2w[-1, :3, 3] -
+                self.virtual_extrinsic_c2w[0, :3, 3]
+        )
+        image_up = _project_to_plane(traj_dir, bev_normal)
+        # Robust fallback if the trajectory direction is degenerate.
+        if np.linalg.norm(image_up) < 1e-6:
+            image_up = _project_to_plane(np.array([1.0, 0.0, 0.0]), bev_normal)
+        if np.linalg.norm(image_up) < 1e-6:
+            image_up = _project_to_plane(np.array([0.0, 1.0, 0.0]), bev_normal)
+        image_up = _normalize(image_up)
+
+        # Pick camera distance so the whole scene fits in the top-down view.
+        # Smaller FOV = more orthographic-looking BEV
+        bev_fov_deg = 90.0
+        fov_rad = np.deg2rad(float(bev_fov_deg))
+        half_extent = 0.5 * np.linalg.norm(extent)
+        distance = 1.25 * half_extent / max(np.tan(0.5 * fov_rad), 1e-6)
+        # distance = max(distance, 2.0 * extent_len)
+        cam_pos = center + bev_normal * distance
+        renderer.setup_camera(
+            float(bev_fov_deg),
+            center.astype(np.float32),
+            cam_pos.astype(np.float32),
+            image_up.astype(np.float32),
+        )
         img = renderer.render_to_image()
-        output_image_path = Path(output_path).with_suffix('.png')
-        o3d.io.write_image(output_image_path, img)
+        # output_image_path = Path(output_path).with_suffix('.png')
+        img_np = np.asarray(img)
+        if img_np.ndim == 3 and img_np.shape[2] == 3:
+            rgb = img_np.astype(np.uint8)
+            alpha = (rgb.max(axis=2) > 3).astype(np.uint8) * 255
+            rgba = np.dstack([rgb, alpha])
+            output_image_path = Path(output_path).with_suffix(".png")
+            cv2.imwrite(str(output_image_path), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+        else:
+            output_image_path = Path(output_path).with_suffix(".png")
+            o3d.io.write_image(output_image_path, img)
+
+        # o3d.io.write_image(output_image_path, img)
         log(f"[{self.__class__.__name__}::export_poses] Camera poses render saved to {output_image_path.resolve().parent.name}/{output_image_path.name}", 'debug')
+
+    def export_poses(
+            self,
+            scale: float = 0.4,
+            output_path: Union[Path, str] = "camera_poses.png",
+            visualize_traversal: bool = False,
+    ) -> None:
+        import cv2
+        import numpy as np
+        import open3d as o3d
+        from matplotlib import pyplot as plt
+        from pathlib import Path
+
+        from utils.misc import log
+
+        # -------------------------------------------------------------------------
+        # Helpers
+        # -------------------------------------------------------------------------
+
+        def _normalize(v: np.ndarray) -> np.ndarray:
+            v = np.asarray(v, dtype=np.float64).reshape(3)
+            return v / (np.linalg.norm(v) + 1e-12)
+
+        def _rotation_from_a_to_b(
+                a: np.ndarray,
+                b: np.ndarray,
+        ) -> np.ndarray:
+            """
+            Return R such that R @ a ~= b.
+            """
+            a = _normalize(a)
+            b = _normalize(b)
+
+            c = float(np.clip(np.dot(a, b), -1.0, 1.0))
+
+            # Already aligned
+            if c > 1.0 - 1e-10:
+                return np.eye(3, dtype=np.float64)
+
+            # Opposite directions
+            if c < -1.0 + 1e-10:
+                # Find any axis perpendicular to a.
+                axis = np.cross(a, np.array([1.0, 0.0, 0.0]))
+
+                if np.linalg.norm(axis) < 1e-8:
+                    axis = np.cross(a, np.array([0.0, 1.0, 0.0]))
+
+                axis = _normalize(axis)
+
+                # 180-degree Rodrigues:
+                # R = -I + 2 aa^T
+                return -np.eye(3) + 2.0 * np.outer(axis, axis)
+
+            v = np.cross(a, b)
+            s = np.linalg.norm(v)
+
+            vx = np.array([
+                [0.0, -v[2], v[1]],
+                [v[2], 0.0, -v[0]],
+                [-v[1], v[0], 0.0],
+            ], dtype=np.float64)
+
+            R = (
+                    np.eye(3, dtype=np.float64)
+                    + vx
+                    + vx @ vx * ((1.0 - c) / (s * s))
+            )
+
+            return R
+
+        def _rotation_z(angle: float) -> np.ndarray:
+            c = np.cos(angle)
+            s = np.sin(angle)
+
+            return np.array([
+                [c, -s, 0.0],
+                [s, c, 0.0],
+                [0.0, 0.0, 1.0],
+            ], dtype=np.float64)
+
+        # -------------------------------------------------------------------------
+        # Floor-based world alignment
+        # -------------------------------------------------------------------------
+
+        fw = getattr(self, "_floor_wall_data", {}) or {}
+
+        floor_n = fw.get("floor_normal", None)
+        floor_d = fw.get("floor_offset", None)
+
+        mean_up = _normalize(self.mean_up_vector)
+
+        if floor_n is not None:
+            floor_n = _normalize(np.asarray(floor_n, dtype=np.float64))
+
+            if floor_d is not None:
+                floor_d = float(floor_d)
+
+            # Make floor normal point in the same general direction as camera up.
+            #
+            # Plane:
+            #     n.x + d = 0
+            #
+            # If we flip n, d must also flip.
+            if np.dot(floor_n, mean_up) < 0.0:
+                floor_n = -floor_n
+
+                if floor_d is not None:
+                    floor_d = -floor_d
+
+            # Rotate floor normal -> +Z.
+            R_floor = _rotation_from_a_to_b(
+                floor_n,
+                np.array([0.0, 0.0, 1.0], dtype=np.float64),
+            )
+
+        else:
+            log(
+                f"[{self.__class__.__name__}::export_poses] "
+                f"No floor_normal available; using mean_up_vector.",
+                "warning",
+            )
+
+            R_floor = _rotation_from_a_to_b(
+                mean_up,
+                np.array([0.0, 0.0, 1.0], dtype=np.float64),
+            )
+
+            floor_d = None
+
+        # -------------------------------------------------------------------------
+        # Also choose a sensible yaw.
+        #
+        # After floor alignment, make trajectory start -> end point toward +X.
+        # This does NOT affect the floor alignment because it only rotates around Z.
+        # -------------------------------------------------------------------------
+
+        trajectory_start = self.virtual_extrinsic_c2w[0, :3, 3]
+        trajectory_end = self.virtual_extrinsic_c2w[-1, :3, 3]
+
+        trajectory_dir = trajectory_end - trajectory_start
+        trajectory_dir_aligned = R_floor @ trajectory_dir
+
+        trajectory_dir_xy = trajectory_dir_aligned[:2]
+
+        if np.linalg.norm(trajectory_dir_xy) > 1e-8:
+            current_angle = np.arctan2(
+                trajectory_dir_xy[1],
+                trajectory_dir_xy[0],
+            )
+
+            R_heading = _rotation_z(-current_angle)
+        else:
+            R_heading = np.eye(3, dtype=np.float64)
+
+        R_align = R_heading @ R_floor
+
+        # -------------------------------------------------------------------------
+        # Translation.
+        #
+        # Original plane:
+        #
+        #     n.x + d = 0
+        #
+        # After R_floor:
+        #
+        #     z = -d
+        #
+        # Therefore translate +d along Z to put the floor exactly at z=0.
+        # -------------------------------------------------------------------------
+
+        t_align = np.zeros(3, dtype=np.float64)
+
+        if floor_d is not None:
+            t_align[2] = floor_d
+
+        T_align = np.eye(4, dtype=np.float64)
+        T_align[:3, :3] = R_align
+        T_align[:3, 3] = t_align
+
+        log(
+            f"[{self.__class__.__name__}::export_poses] "
+            f"Aligning scene to floor: "
+            f"floor_normal={floor_n if floor_n is not None else mean_up}, "
+            f"floor_offset={floor_d}",
+            "debug",
+        )
+
+        # -------------------------------------------------------------------------
+        # Build scene in ORIGINAL calibration coordinates
+        # -------------------------------------------------------------------------
+
+        scene = o3d.geometry.TriangleMesh()
+
+        # GT cameras
+        for c2w in self.gt_extrinsics_c2w:
+            frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+                size=scale,
+                origin=c2w[:3, 3],
+            )
+
+            frame.rotate(
+                c2w[:3, :3],
+                center=c2w[:3, 3],
+            )
+
+            scene += frame
+
+        # Mean look-at point
+        sph0 = o3d.geometry.TriangleMesh.create_sphere(
+            radius=scale * 0.5
+        )
+
+        sph0.paint_uniform_color([1.0, 0.2, 0.8])
+        sph0.translate(self.mean_look_at_point)
+        sph0.compute_vertex_normals()
+
+        scene += sph0
+
+        # -------------------------------------------------------------------------
+        # Virtual trajectory
+        # -------------------------------------------------------------------------
+
+        if visualize_traversal:
+            order = []
+            seen = set()
+
+            steps = max(self.num_points, 200)
+            fps = 30
+
+            single_vcam_velocity = (
+                    np.linalg.norm(
+                        np.diff(
+                            self.virtual_extrinsic_c2w[:, :3, 3],
+                            axis=0,
+                        ),
+                        axis=1,
+                    ).mean()
+                    * fps
+            )
+
+            it = self.traverse(
+                velocity=single_vcam_velocity,
+                loop=False,
+                data_fps=fps,
+                debug_mode=True,
+            )
+
+            for _ in range(steps):
+                try:
+                    t, s, gt_idx_closest, gt_idx_middle = next(it)
+                except StopIteration:
+                    break
+
+                vidx = min(
+                    int(t * self.num_points),
+                    self.num_points - 1,
+                )
+
+                if len(order) == 0 or order[-1] != vidx:
+                    order.append(vidx)
+                    seen.add(vidx)
+
+                if len(seen) >= self.num_points:
+                    break
+
+            assert len(order) > 0, "No virtual cams yielded during traversal"
+
+            cmap = plt.get_cmap("viridis")
+
+            r0 = scale * 0.05
+            r1 = scale * 0.22
+
+            M = len(order)
+
+            for k, vidx in enumerate(order):
+                alpha = 0.0 if M <= 1 else k / (M - 1)
+
+                col = cmap(alpha)[:3]
+                r = r0 + (r1 - r0) * alpha
+
+                vc = self.virtual_extrinsic_c2w[vidx][:3, 3]
+
+                sph = o3d.geometry.TriangleMesh.create_sphere(
+                    radius=float(r)
+                )
+
+                sph.paint_uniform_color([
+                    float(col[0]),
+                    float(col[1]),
+                    float(col[2]),
+                ])
+
+                sph.translate(vc)
+                sph.compute_vertex_normals()
+
+                scene += sph
+
+        else:
+            cmap = plt.get_cmap("tab20")
+
+            n_gt = len(self.gt_extrinsics_c2w)
+
+            color_indices = np.arange(n_gt) % 20
+            gt_colors = cmap(color_indices / 19.0)
+
+            step = max(1, self.num_points // 40)
+
+            for virtual_idx in range(
+                    0,
+                    self.num_points,
+                    step,
+            ):
+                vc = self.virtual_extrinsic_c2w[
+                    virtual_idx, :3, 3
+                ]
+
+                sph = o3d.geometry.TriangleMesh.create_sphere(
+                    radius=scale * 0.1
+                )
+
+                col = gt_colors[
+                    self._inv_assignment_closest.get(
+                        virtual_idx,
+                        0,
+                    ) % 20
+                    ][:3]
+
+                sph.paint_uniform_color(col)
+                sph.translate(vc)
+                sph.compute_vertex_normals()
+
+                scene += sph
+
+        # -------------------------------------------------------------------------
+        # IMPORTANT:
+        # Apply ONE rigid transform to everything.
+        #
+        # After this:
+        #
+        #   floor -> XY plane
+        #   floor normal -> +Z
+        #   floor height -> Z = 0
+        #   trajectory start->end -> approximately +X
+        #
+        # This is what gets written into the PLY.
+        # -------------------------------------------------------------------------
+
+        scene.transform(T_align)
+
+        # -------------------------------------------------------------------------
+        # PLY
+        # -------------------------------------------------------------------------
+
+        output_ply_path = Path(output_path).with_suffix(".ply")
+
+        o3d.io.write_triangle_mesh(
+            output_ply_path,
+            scene,
+            write_ascii=True,
+        )
+
+        log(
+            f"[{self.__class__.__name__}::export_poses] "
+            f"Floor-aligned camera poses saved to "
+            f"{output_ply_path.resolve().parent.name}/"
+            f"{output_ply_path.name}",
+            "debug",
+        )
+
+        # -------------------------------------------------------------------------
+        # BEV PNG
+        #
+        # Since the PLY is NOW aligned, BEV is trivial:
+        # +Z is physically "up".
+        # -------------------------------------------------------------------------
+
+        renderer = o3d.visualization.rendering.OffscreenRenderer(
+            1024,
+            1024,
+        )
+
+        renderer.scene.set_background([
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ])
+
+        mat = o3d.visualization.rendering.MaterialRecord()
+        mat.shader = "defaultLit"
+
+        renderer.scene.add_geometry(
+            "scene",
+            scene,
+            mat,
+        )
+
+        bounds = scene.get_axis_aligned_bounding_box()
+
+        center = bounds.get_center().astype(np.float64)
+        extent_xyz = bounds.get_extent().astype(np.float64)
+
+        # BEV camera directly above the scene.
+        bev_fov_deg = 90.0
+        fov_rad = np.deg2rad(bev_fov_deg)
+
+        xy_extent = max(
+            float(extent_xyz[0]),
+            float(extent_xyz[1]),
+            1e-6,
+        )
+
+        distance = (
+                0.65
+                * xy_extent
+                / max(np.tan(0.5 * fov_rad), 1e-6)
+        )
+
+        distance = max(
+            distance,
+            float(extent_xyz[2]) + 0.5,
+        )
+
+        cam_pos = center.copy()
+        cam_pos[2] = bounds.get_max_bound()[2] + distance
+
+        # Because trajectory direction was aligned with +X,
+        # choose image-up = +Y.
+        image_up = np.array([
+            0.0,
+            1.0,
+            0.0,
+        ], dtype=np.float32)
+
+        renderer.setup_camera(
+            float(bev_fov_deg),
+            center.astype(np.float32),
+            cam_pos.astype(np.float32),
+            image_up,
+        )
+
+        img = renderer.render_to_image()
+
+        # -------------------------------------------------------------------------
+        # Transparent PNG
+        # -------------------------------------------------------------------------
+
+        img_np = np.asarray(img)
+
+        output_image_path = Path(output_path).with_suffix(".png")
+
+        if img_np.ndim == 3 and img_np.shape[2] == 3:
+            rgb = img_np.astype(np.uint8)
+
+            alpha = (
+                            rgb.max(axis=2) > 3
+                    ).astype(np.uint8) * 255
+
+            rgba = np.dstack([
+                rgb,
+                alpha,
+            ])
+
+            cv2.imwrite(
+                str(output_image_path),
+                cv2.cvtColor(
+                    rgba,
+                    cv2.COLOR_RGBA2BGRA,
+                ),
+            )
+
+        else:
+            o3d.io.write_image(
+                output_image_path,
+                img,
+            )
+
+        log(
+            f"[{self.__class__.__name__}::export_poses] "
+            f"Floor-aligned BEV render saved to "
+            f"{output_image_path.resolve().parent.name}/"
+            f"{output_image_path.name}",
+            "debug",
+        )
 
     @staticmethod
     def compute_mean_look_at_and_up(cam_centers: np.ndarray, cam_rotmats_c2w: np.ndarray):
@@ -446,7 +1060,7 @@ class InterpolatedCameraOrbit(CameraOrbit):
         """
         from utils.calib import CalibrationData
         if calibration_data_from_folder is None:
-            calibration_data = CalibrationData.from_session(calibration_session, method=calibration_method)
+            calibration_data = CalibrationData.from_session(calibration_session)
         else:
             calibration_data = CalibrationData.from_session_folder(calibration_data_from_folder)
         if image_size_hw is not None:
@@ -693,7 +1307,7 @@ class AudienceViewAnchoredCameraOrbit_bak(CameraOrbit):
         if image_size_hw is not None:
             calibration_data = calibration_data.rotate(rotate).resize(*image_size_hw)
         else:
-            calibration_data =  calibration_data.rotate(rotate)
+            calibration_data = calibration_data.rotate(rotate)
         return cls(
             gt_intrinsics=calibration_data.intrinsics.cpu().numpy(),
             gt_extrinsics_w2c=calibration_data.extrinsics_w2c.cpu().numpy(),
@@ -701,6 +1315,7 @@ class AudienceViewAnchoredCameraOrbit_bak(CameraOrbit):
             gt_image_size_hw=(int(calibration_data.image_size[0][0]), int(calibration_data.image_size[0][1])),
             **trajectory_kwargs
         )
+
 
 class AudienceViewAnchoredCameraOrbit(CameraOrbit):
     def create_virtual_cameras(self,
@@ -802,11 +1417,11 @@ class AudienceViewAnchoredCameraOrbit(CameraOrbit):
                 sign_wall_vs_vhat = torch.sign(torch.dot(_normalize(w_in_plane), v_hat))
 
         # Preferred sign given mode
-        # bulge_mode = "toward" # TODO SIMONE33 COMMENT THIS LINE, FOR SINGER CLOSE TO MICROPHONE bulge_mode = "toward"
+        bulge_mode = "away"  # TODO SIMONE33 COMMENT THIS LINE, FOR SINGER CLOSE TO MICROPHONE bulge_mode = "toward"
         if bulge_mode == "away":
             base_sign = -sign_wall_vs_vhat  # enforce away from wall
         elif bulge_mode == "toward":
-            base_sign = sign_wall_vs_vhat   # enforce toward wall
+            base_sign = sign_wall_vs_vhat  # enforce toward wall
         else:  # "auto" legacy: same as original 'sign_pref'
             base_sign = sign_wall_vs_vhat
 
@@ -960,29 +1575,98 @@ class AudienceViewAnchoredCameraOrbit(CameraOrbit):
         )
 
     @classmethod
-    def from_session(cls,
-                     calibration_session: Union[Path, str],
-                     calibration_method: Literal['MultiCamCalib', 'Caliscope'] = 'MultiCamCalib',
-                     reconstruction_idx: Union[Literal['all'], Sequence[int]] = 'all',
-                     image_size_hw: Optional[Tuple[int, int]] = None,
-                     calibration_data_from_folder: Optional[Path] = None,
-                     rotate: Optional[Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']] = None,
-                     **trajectory_kwargs) -> 'AudienceViewAnchoredCameraOrbit':
+    def from_session(
+            cls,
+            calibration_session: Union[Path, str],
+            reconstruction_idx: Union[Literal['all'], Sequence[int]] = 'all',
+            image_size_hw: Optional[Tuple[int, int]] = None,
+            calibration_data_from_folder: Optional[Path] = None,
+            rotate: Optional[
+                Literal['90_COUNTERCLOCKWISE', '90_CLOCKWISE', '180']
+            ] = None,
+            **trajectory_kwargs,
+    ) -> 'AudienceViewAnchoredCameraOrbit':
+
         from utils.calib import CalibrationData
+
         if calibration_data_from_folder is None:
-            calibration_data = CalibrationData.from_session(calibration_session, method=calibration_method)
+            calibration_data = CalibrationData.from_session(
+                calibration_session,
+                estimate_floor=True,
+            )
         else:
-            calibration_data = CalibrationData.from_session_folder(calibration_data_from_folder)
+            calibration_data = CalibrationData.from_session_folder(
+                calibration_data_from_folder
+            )
+
+        if calibration_data is None:
+            raise RuntimeError(
+                f"Could not load calibration from {calibration_session}"
+            )
+
         if image_size_hw is not None:
-            calibration_data = calibration_data.rotate(rotate).resize(*image_size_hw)
+            calibration_data = (
+                calibration_data
+                .rotate(rotate)
+                .resize(*image_size_hw)
+            )
         else:
             calibration_data = calibration_data.rotate(rotate)
+
+        # ---------------------------------------------------------
+        # Forward floor plane into CameraOrbit
+        # ---------------------------------------------------------
+        if calibration_data.floor_plane is not None:
+            floor_plane = calibration_data.floor_plane
+
+            trajectory_kwargs.setdefault(
+                "floor_normal",
+                floor_plane.normal
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(np.float64),
+            )
+
+            trajectory_kwargs.setdefault(
+                "floor_offset",
+                float(
+                    floor_plane.offset
+                    .detach()
+                    .cpu()
+                    .item()
+                ),
+            )
+
+            log(
+                f"[{cls.__name__}::from_session] "
+                f"floor normal={trajectory_kwargs['floor_normal']}, "
+                f"offset={trajectory_kwargs['floor_offset']:+.4f}",
+                "debug",
+            )
+
+        else:
+            log(
+                f"[{cls.__name__}::from_session] "
+                f"No floor plane available.",
+                "warning",
+            )
+
         return cls(
             gt_intrinsics=calibration_data.intrinsics.cpu().numpy(),
             gt_extrinsics_w2c=calibration_data.extrinsics_w2c.cpu().numpy(),
-            reconstruction_idx=[int(_) for _ in reconstruction_idx] if not isinstance(reconstruction_idx, str) else reconstruction_idx,
-            gt_image_size_hw=(int(calibration_data.image_size[0][0]), int(calibration_data.image_size[0][1])),
-            **trajectory_kwargs
+
+            reconstruction_idx=[
+                int(_) for _ in reconstruction_idx
+            ] if not isinstance(reconstruction_idx, str)
+            else reconstruction_idx,
+
+            gt_image_size_hw=(
+                int(calibration_data.image_size[0][0]),
+                int(calibration_data.image_size[0][1]),
+            ),
+
+            **trajectory_kwargs,
         )
 
 
@@ -990,11 +1674,11 @@ if __name__ == "__main__":
     from utils.calib import CalibrationData
 
     # read session data
-    orbit_ = InterpolatedCameraOrbit.from_session('Thanos_2_Calib_1', reconstruction_idx=[0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11], bezier_degree=8)
-    orbit_.export_poses()
-    counter_ = 0
-    for t_, s_, gtic_, gtim_ in orbit_.traverse(velocity=3.0, loop=True, debug_mode=True):
-        print(f"t: {t_:.3f}, s: {s_:.2f} (gt={gtic_:02d}|{gtim_:02d})")
-        if counter_ > 100:
-            break
-        counter_ += 1
+    orbit_ = InterpolatedCameraOrbit.from_session('Cagliari_2_5cams_Calib_2', reconstruction_idx=[1,2,3,4]) #, bezier_degree=2)
+    orbit_.export_poses(visualize_traversal=False)
+    # counter_ = 0
+    # for t_, s_, gtic_, gtim_ in orbit_.traverse(velocity=3.0, loop=True, debug_mode=True):
+    #     print(f"t: {t_:.3f}, s: {s_:.2f} (gt={gtic_:02d}|{gtim_:02d})")
+    #     if counter_ > 100:
+    #         break
+    #     counter_ += 1

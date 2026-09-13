@@ -65,7 +65,7 @@ class CapturestudioVirtualBackgroundFloorWallEstimator:
     def _segment(self, rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         if self.__class__.SEGMENTOR_MODEL is None:
             from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
-            processor = AutoImageProcessor.from_pretrained(self.__class__.SEGMENTOR_MODEL_NAME, use_fast=True)
+            processor = AutoImageProcessor.from_pretrained(self.__class__.SEGMENTOR_MODEL_NAME, backend='torchvision')
             model = AutoModelForSemanticSegmentation.from_pretrained(self.__class__.SEGMENTOR_MODEL_NAME, dtype=torch.float16).to(self.__class__.SEGMENTOR_MODEL_DEVICE)
             self.__class__.SEGMENTOR_MODEL = (processor, model)
         processor, model = self.__class__.SEGMENTOR_MODEL
@@ -81,10 +81,97 @@ class CapturestudioVirtualBackgroundFloorWallEstimator:
             )[0]
             p = logits.softmax(dim=0)[floor_ids].sum(dim=0).float().detach().cpu().numpy()
         floor_prob_map = np.clip(p, 0, 1).astype(np.float32)
-        floor_mask = floor_prob_map >= 0.5
+        floor_mask = floor_prob_map >= 0.999
         return floor_mask, floor_prob_map
 
+    @staticmethod
+    def tune_rgb(rgb: np.ndarray) -> np.ndarray:
+        """
+        Input:
+            rgb: HxWx3 uint8 RGB image
+
+        Output:
+            HxWx3 uint8 RGB tuned image, strongly brightened
+        """
+        if rgb.ndim != 3 or rgb.shape[2] != 3:
+            raise ValueError(f"Expected HxWx3 RGB image, got {rgb.shape}")
+
+        if rgb.dtype != np.uint8:
+            raise TypeError(f"Expected uint8 image, got {rgb.dtype}")
+
+        x = rgb.astype(np.float32) / 255.0
+
+        # sRGB -> linear RGB
+        lin = np.where(
+            x <= 0.04045,
+            x / 12.92,
+            ((x + 0.055) / 1.055) ** 2.4,
+        )
+
+        # RGB luminance in linear light
+        luma = (
+                0.2126 * lin[:, :, 0] +
+                0.7152 * lin[:, :, 1] +
+                0.0722 * lin[:, :, 2]
+        )
+
+        valid = luma > 1e-5
+        if np.count_nonzero(valid) < 64:
+            return rgb.copy()
+
+        current_p90 = float(np.percentile(luma[valid], 90.0))
+        current_p90 = max(current_p90, 1e-6)
+
+        # Much brighter target.
+        target_p90 = 0.75
+
+        ev = np.log2(target_p90 / current_p90)
+
+        # Allow much stronger lift.
+        ev = float(np.clip(ev, 0.55, 2.75))
+
+        factor = np.exp2(ev)
+
+        # Less shadow protection = darker regions brighten more.
+        shadow_protect = 0.035
+        gate = luma[:, :, None] / (luma[:, :, None] + shadow_protect)
+
+        lin = lin * (1.0 + (factor - 1.0) * gate)
+
+        # Mild highlight compression, not too much.
+        shoulder = 0.08
+        lin = lin / (1.0 + shoulder * lin)
+
+        # Extra midtone lift.
+        midtone = 0.18
+        lin = lin + midtone * lin * (1.0 - lin)
+
+        # Saturation recovery.
+        luma3 = (
+                0.2126 * lin[:, :, 0:1] +
+                0.7152 * lin[:, :, 1:2] +
+                0.0722 * lin[:, :, 2:3]
+        )
+
+        sat = 1.10
+        lin = luma3 + (lin - luma3) * sat
+
+        # linear RGB -> sRGB
+        out = np.where(
+            lin <= 0.0031308,
+            12.92 * lin,
+            1.055 * np.maximum(lin, 1e-8) ** (1.0 / 2.4) - 0.055,
+        )
+
+        return np.clip(np.round(out * 255.0), 0, 255).astype(np.uint8)
+
     def _estimate_floor_plane(self, rgb: np.ndarray, depth: np.ndarray, points_w: np.ndarray) -> Optional[Tuple[np.ndarray, float, np.ndarray, np.ndarray]]:
+        rgb_tuned = self.tune_rgb(rgb)
+        # cv2.imwrite(f'tuned_ba_{np.random.randint(0,10000):05d}.jpg', np.concatenate((rgb, rgb_tuned), axis=1))
+        # print('tuning done')
+        # exit(0)
+        rgb = rgb_tuned
+
         floor_mask, floor_prob = self._segment(rgb)
         depth_mask = np.isfinite(depth) & (depth > 0) & (depth <= self.max_depth_for_floor_m)
         points_w_mask = np.isfinite(points_w).all(-1)
@@ -364,6 +451,7 @@ class CapturestudioVirtualBackgroundFloorWallEstimator:
         return floor_normal, floor_offset, floor_corners
 
     def __call__(self, views: List[RGBDImage], vis_2d_path: Optional[Path] = None, vis_3d_path: Optional[Path] = None) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray, float, np.ndarray]:
+        views = [views[_] for _ in [0, 3]]
         # Floor plane estimation
         floor_plane_candidates = self._estimate_floor_planes(views)
         if not floor_plane_candidates:
@@ -491,6 +579,7 @@ class CapturestudioVirtualBackgroundFloorWallEstimator:
                         cv2.polylines(canvas_bgr, [pts.reshape(-1, 1, 2)], False, (255, 255, 0), 1, cv2.LINE_AA)
 
             grid_images.append(canvas_bgr)
+
         if len(grid_images) % 2 == 1:
             grid_images.append(np.zeros_like(grid_images[-1]))
 
@@ -691,7 +780,8 @@ class CapturestudioVirtualBackground:
 
     @classmethod
     def from_capturestudio_dataset(cls,
-                                   dataset: MultiSessionDataset, t: int = 0,
+                                   dataset: MultiSessionDataset,
+                                   t: int = 0,
                                    estimator_cls: Type[CapturestudioVirtualBackgroundFloorWallEstimator] = CapturestudioVirtualBackgroundFloorWallEstimator,
                                    **estimator_kwargs) -> 'CapturestudioVirtualBackground':
         from reconstruction.vis.dataset_visualizer import DatasetVisualizer
@@ -1057,9 +1147,11 @@ class CapturestudioVirtualCameras:
                                      wall_normal=background.wall_normal, wall_offset=background.wall_offset)
 
         camera_orbit = dataset.get_camera_orbit(camera_orbit_type, **floor_wall_kwargs)
+        # camera_orbit.export_poses(output_path='safdsafdsfsdfa.png', visualize_traversal=True)
         data_fps = dataclass_kwargs.get('data_fps', 30)
         traverse_velocity = dataclass_kwargs.pop('camera_traverse_velocity', 0.5)
-        camera_orbit_traversor = camera_orbit.traverse(velocity=traverse_velocity, data_fps=data_fps)
+        # camera_orbit_traversor = camera_orbit.traverse(velocity=traverse_velocity, data_fps=data_fps)
+        camera_orbit_traversor = camera_orbit.traverse_normalized(num_frames=t_total) # , velocity=traverse_velocity, data_fps=data_fps)
 
         virtual_data = [(K_, c2w_, idx_closest_) for i, (K_, c2w_, idx_closest_, _) in
                         zip(range(0, t_total, 30 // data_fps), camera_orbit_traversor)]
@@ -1462,18 +1554,27 @@ class TeaserGeneratorRenderConfig(object):
     camera_orbit_offset_m: float
 
     @classmethod
-    def for_apr_may_2025(cls, use_gs: bool, image_size_hw: Tuple[int, int], show_gt_frusta: bool = False, camera_traverse_velocity: float = 0.6, camera_orbit_offset_m:float=0.4) -> 'TeaserGeneratorRenderConfig':
+    def for_apr_may_2025(
+            cls,
+            use_gs: bool,
+            image_size_hw: Tuple[int, int],
+            camera_orbit_type: Literal['interpolated', 'audience'],
+            show_gt_frusta: bool = False,
+            camera_traverse_velocity: float = 0.6,
+            camera_orbit_offset_m: float = 0.4,
+            wall_overshoot_m: float = -4.0
+    ) -> 'TeaserGeneratorRenderConfig':
         return TeaserGeneratorRenderConfig(
             use_gs=use_gs,
             image_size_hw=image_size_hw,
             # Background
             floor_depth_scale=3.5,
-            wall_overshoot_m=-4.0,
+            wall_overshoot_m=wall_overshoot_m,
             wall_pad_width_m=3.0,
             # Cameras
             camera_show_gt_frusta=show_gt_frusta,
             camera_show_virtual_frusta=False,
-            camera_orbit_type='interpolated',
+            camera_orbit_type=camera_orbit_type,
             camera_traverse_velocity=camera_traverse_velocity,
             camera_orbit_offset_m=camera_orbit_offset_m,
         )
@@ -1496,11 +1597,12 @@ class TeaserGenerator(metaclass=abc.ABCMeta):
             **scene_kwargs
     ):
         sessions_perf = [session_perf] if isinstance(session_perf, (str, Path)) else session_perf
-        if len(sessions_perf) > 1 and isinstance(sessions_perf[1], Path):
-            # first --> raw, then --> merged ply dirs
-            self.session_raw = sessions_perf.pop(0)
-        else:
-            self.session_raw = sessions_perf[0]
+        # if len(sessions_perf) > 1 and isinstance(sessions_perf[1], Path):
+        #     # first --> raw, then --> merged ply dirs
+        #     self.session_raw = calib.pop(0)
+        # else:
+        #     self.session_raw = sessions_perf[0]
+        self.session_raw = session_calib
         self.sessions_perf = sessions_perf
         self.session_calib = session_calib
         self.calib_method = calib_method

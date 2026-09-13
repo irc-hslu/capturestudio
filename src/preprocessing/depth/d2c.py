@@ -64,7 +64,7 @@ def align_depth_to_color_for_cam(depth_dir: str, out_dir: str, parameters_dir: s
     extri = np.load(parameters_dir / 'depth_extri2color.npy')
     first_depth = PathUtils.read_file(all_depth_files[0], png_type='depth')
 
-    from .orbbec_d2c_cuda import (
+    from preprocessing.depth.orbbec_d2c_cuda import (
         AlignImpl,
         OBCameraIntrinsic,
         OBCameraDistortion,
@@ -130,3 +130,12 @@ def align_depth_to_color_for_cam(depth_dir: str, out_dir: str, parameters_dir: s
     torch.cuda.empty_cache()
 
     return True
+
+
+if __name__ == '__main__':
+    for cam in range(1,6):
+        align_depth_to_color_for_cam(
+            f'/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Calib_2/orbbec/cam0{cam}/depth',
+            f'/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Calib_2/orbbec/cam0{cam}/depth_aligned',
+            f'/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Calib_2/orbbec/cam0{cam}/parameters',
+        )

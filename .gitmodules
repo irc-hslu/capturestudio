@@ -7,3 +7,6 @@
 [submodule "annotator"]
 	path = annotator
 	url = git@github.com:irc-hslu/capturestudio-annotate.git
+[submodule "resources/submodules/caliscope"]
+	path = resources/submodules/caliscope
+	url = https://github.com/mprib/caliscope.git

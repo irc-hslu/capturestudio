@@ -3,6 +3,7 @@
     <words>
       <w>Calib</w>
       <w>Caliscope</w>
+      <w>Colmap</w>
       <w>Decord</w>
       <w>Fempto</w>
       <w>Hochschule</w>
@@ -16,12 +17,23 @@
       <w>extri</w>
       <w>extrinsics</w>
       <w>forceinline</w>
+      <w>frusta</w>
+      <w>gtim</w>
+      <w>holomit</w>
       <w>intri</w>
       <w>kannala</w>
       <w>orbbec</w>
       <w>pointclouds</w>
+      <w>prerotated</w>
       <w>rgbd</w>
       <w>rgbdimage</w>
+      <w>rotmat</w>
+      <w>rotmats</w>
+      <w>superpoint</w>
+      <w>traversor</w>
+      <w>tvecs</w>
+      <w>unprojects</w>
+      <w>unsynchronized</w>
       <w>xywh</w>
     </words>
   </dictionary>

@@ -65,6 +65,7 @@ dependencies = [
     "torch-generic-nms",
     "loguru",
     "diff-gauss",
+    "lightglue",
 ]
 
 [tool.uv]
@@ -84,6 +85,7 @@ sam3 = { git = "https://github.com/facebookresearch/sam3.git" }
 cc-torch = { git = "https://github.com/ronghanghu/cc_torch.git" }
 torch-generic-nms = { git = "https://github.com/ronghanghu/torch_generic_nms" }
 diff-gauss = { git = "https://github.com/charisoudis/diff-gaussian-rasterization.git" }
+lightglue = { git = "https://github.com/cvg/LightGlue.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

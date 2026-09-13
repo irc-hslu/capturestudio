@@ -145,6 +145,7 @@ dependencies = [
     { name = "imageio-ffmpeg", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "kombu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "kornia", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "lightglue", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "loguru", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "lpips", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "matplotlib", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -210,6 +211,7 @@ requires-dist = [
     { name = "imageio-ffmpeg" },
     { name = "kombu" },
     { name = "kornia" },
+    { name = "lightglue", git = "https://github.com/cvg/LightGlue.git" },
     { name = "loguru" },
     { name = "lpips" },
     { name = "matplotlib" },
@@ -920,6 +922,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/49/ac/21a1f8aa3777f5658576777ea76bfb124b702c520bbe90edf4ae9915eafa/lazy_loader-0.5.tar.gz", hash = "sha256:717f9179a0dbed357012ddad50a5ad3d5e4d9a0b8712680d4e687f5e6e6ed9b3", size = 15294, upload-time = "2026-03-06T15:45:09.054Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/a1/8d812e53a5da1687abb10445275d41a8b13adb781bbf7196ddbcf8d88505/lazy_loader-0.5-py3-none-any.whl", hash = "sha256:ab0ea149e9c554d4ffeeb21105ac60bed7f3b4fd69b1d2360a4add51b170b005", size = 8044, upload-time = "2026-03-06T15:45:07.668Z" },
+]
+
+[[package]]
+name = "lightglue"
+version = "0.0"
+source = { git = "https://github.com/cvg/LightGlue.git#eb42fee2d71449efb0aa5c10549752b5d75384d8" }
+dependencies = [
+    { name = "kornia", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "matplotlib", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "opencv-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
 [[package]]

@@ -1,9 +1,8 @@
 import copy
 import functools
-import os
 from pathlib import Path
 from typing import Optional, Tuple, Literal, Union, Dict, List, Any
-from warnings import deprecated
+from typing_extensions import deprecated
 
 import cv2
 import numpy as np

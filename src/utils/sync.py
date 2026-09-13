@@ -16,7 +16,7 @@ class SyncUtils:
             tolerance_ms: int = 15,
             max_clusters: int = 100_000,
             info_name: str = 'multi_sync.info',
-            force: bool = False,
+            force: bool = False
     ):
         """
         Generate Orbbec multi-sync info using host-corrected (virtual) timestamps.
@@ -536,26 +536,25 @@ class SyncUtils:
 
 
 if __name__ == '__main__':
-    for calib_, offset_ in zip([1, 2], [-1149, -1184]):
-        p_ = f'/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Calib_{calib_}'
-        SyncUtils.generate_multisync_info(
-            p_,
-            hosts={
-                0: {"cams": [1, 2, 4], "offset_ms": 0, "is_master": True},
-                1: {"cams": [3, 5], "offset_ms": offset_},
-            },
-            force=True
-        )
-        SyncUtils.synchronize_frames_using_timestamps(
-            p_
-        )
-        from preprocessing.generate_video import generate_multiview_video
+    p_ = f'/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Perf_1'
+    SyncUtils.generate_multisync_info(
+        p_,
+        hosts={
+            0: {"cams": [1, 2, 4], "offset_ms": 0, "is_master": True},
+            1: {"cams": [3, 5], "offset_ms": -1116},
+        },
+        force=False
+    )
+    SyncUtils.synchronize_frames_using_timestamps(
+        p_
+    )
+    from preprocessing.generate_video import generate_multiview_video
 
-        generate_multiview_video(
-            p_,
-            'color', 'jpg'
-        )
-        generate_multiview_video(
-            p_,
-            'depth', 'png'
-        )
+    generate_multiview_video(
+        p_,
+        'color', 'jpg'
+    )
+    generate_multiview_video(
+        p_,
+        'depth', 'png'
+    )

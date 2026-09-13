@@ -1,10 +1,15 @@
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Literal, Optional
 
 from tasks import app, AutoRetryTask
 from utils.misc import log, PathUtils
+
+src_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(src_root))
+sys.path.append(str(src_root.parent / 'resources' / 'submodules'))
 
 os.environ['DECORD_EOF_RETRY_MAX'] = '20480'
 
@@ -200,47 +205,106 @@ def compute_segmentation_mask(cam_color_dir: str, out_dir: str, start_offset: in
         log(f"\tSegmentation masks already exist in {out_dir}. Skipping segmentation.", 'debug')
         return None
 
-    # First run detection on the first frame to get bboxes based on the classes
+    # First run detection on a usable frame to get bboxes based on the classes
     first_frame_path = color_files[0]
-    detections_path = out_dir / f'detections-{first_frame_path.stem}.json'
 
-    # Build a global index map from the full color folder
     all_color_files_global = sorted(cam_color_dir.glob('*.jpg'), key=lambda x: int(x.stem))
     stem_to_global_idx = {p.stem: i for i, p in enumerate(all_color_files_global)}
+    current_video_global_indices = [stem_to_global_idx[p.stem] for p in color_files]
+    current_global_start = current_video_global_indices[0]
+    current_global_end = current_video_global_indices[-1] + 1
 
-    if not detections_path.exists():
-        # If it finds other detections e.g. detections-<another frame stem>.json:
-        # Use that instead and compute first_frame_global_idx to be the idx of the stem from the color folder.
-        alt_detection_files = sorted(out_dir.glob('detections-*.json'))
-        chosen_alt = None
-        chosen_alt_idx = None
-        for p in alt_detection_files:
-            stem = p.stem.split('detections-', 1)[-1]
-            if stem in stem_to_global_idx and (cam_color_dir / f"{stem}.jpg").exists():
-                chosen_alt = p
-                chosen_alt_idx = stem_to_global_idx[stem]
-                break
+    detections_path = None
+    detections = []
 
-        if chosen_alt is not None:
-            detections_path = chosen_alt
-            first_frame_global_idx = int(chosen_alt_idx)
+    for p in sorted(out_dir.glob('detections-*.json')):
+        det_stem = p.stem.split('detections-', 1)[-1]
+        if det_stem not in stem_to_global_idx:
+            continue
+
+        det_file_global_idx = stem_to_global_idx[det_stem]
+
+        with open(p, 'r') as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            continue
+
+        normalized = []
+        for d in data:
+            d = dict(d)
+
+            # If detections file is attached to the first global frame, frame_idx is already session-relative.
+            # If detections file is attached to another frame, frame_idx is relative to that detection file frame.
+            if det_file_global_idx == 0:
+                global_idx = int(d.get('frame_idx', 0))
+            else:
+                global_idx = det_file_global_idx + int(d.get('frame_idx', 0))
+
+            if current_global_start <= global_idx < current_global_end:
+                d['frame_idx'] = global_idx - current_global_start
+                normalized.append(d)
+
+        if normalized:
+            detections_path = p
+            detections = normalized
+            log(
+                f'[preprocessing_color::compute_segmentation_mask][{cam_color_dir.parent.name}] '
+                f'Using detections from {p.parent.name}/{p.name}; '
+                f'{len(detections)} prompts overlap current video frames '
+                f'{current_global_start}:{current_global_end}',
+                'debug'
+            )
+            break
+
+    if not detections:
+        detections_path = out_dir / f'detections-{first_frame_path.stem}.json'
+
+        if detections_path.exists():
+            with open(detections_path, 'r') as f:
+                detections = json.load(f)
+            detections = detections if isinstance(detections, list) else []
         else:
             from preprocessing.color import detect
             detections = detect(first_frame_path, rotate=rotate, unrotate_output=True)
-            first_frame_global_idx = int(stem_to_global_idx.get(first_frame_path.stem, 0))
             with open(detections_path, 'w') as f:
                 json.dump(detections, f, indent=4)
-    else:
-        det_stem = detections_path.stem.split('detections-', 1)[-1]
-        first_frame_global_idx = int(stem_to_global_idx.get(det_stem, stem_to_global_idx.get(first_frame_path.stem, 0)))
 
-    with open(detections_path, 'r') as f:
-        detections = json.load(f)
+        for d in detections:
+            d['frame_idx'] = int(d.get('frame_idx', 0))
 
-    # Then segment in video
-    from preprocessing.color import segment
-    segment(video_path, detections, mask_file_paths, rotate=rotate, unrotate_output=True, first_frame_global_idx=first_frame_global_idx)
+    if not detections:
+        import cv2
+        import numpy as np
+
+        img = cv2.imread(str(first_frame_path))
+        assert img is not None, f"Could not read image for blank mask shape: {first_frame_path}"
+        blank = np.zeros(img.shape[:2], dtype=np.uint8)
+
+        for p in mask_file_paths:
+            if not (p.exists() and PathUtils.verify_file(p)):
+                PathUtils.write_file(p, blank)
+
+        log(
+            f'\tNo detections found for {cam_color_dir.parent.name}/{cam_color_dir.name}; '
+            f'writing blank masks for current video chunk.',
+            'warning'
+        )
+        return None
+
+    from preprocessing.color import ColorProcessor
+    cp = ColorProcessor(
+        cam_color_dir=cam_color_dir,
+        rotate=rotate,
+        unrotate_output=True,
+        segment_chunk_size=1000,
+        start_offset=start_offset,
+        total_frames=total_frames,
+    )
+    ok = cp.segment()
+    if ok:
+        cp.generate_mask_overlay_video()
     return None
+
 
 @app.task(name="preprocessing.color.compute_optical_flow", base=AutoRetryTask)
 def compute_optical_flow(
@@ -277,6 +341,13 @@ def compute_optical_flow(
     if 'fwd' in which:
         assert out_dir_fwd is not None, f'out_dir_fwd must be provided if which={which}.'
 
-    from preprocessing.color import estimate_optical_flow
-    estimate_optical_flow(Path(cam_color_dir), Path(out_dir_bwd), Path(out_dir_fwd) if out_dir_fwd is not None else None, start_offset=start_offset, total_frames=total_frames, which=which, rotate=rotate)
+    from preprocessing.color import ColorProcessor
+    cp = ColorProcessor(
+        cam_color_dir=cam_color_dir,
+        rotate=rotate,
+        unrotate_output=True,
+        start_offset=start_offset,
+        total_frames=total_frames,
+    )
+    cp.estimate_flow(which=which)
     return None

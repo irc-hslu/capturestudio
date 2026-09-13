@@ -132,6 +132,30 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
         cam_dir.name: sorted(cam_dir.glob(f'{subfolder}/*.{file_extension}'), key=lambda x: int(x.stem))
         for cam_dir in all_cam_dirs
     }
+
+    lut_by_cam = {}
+    if not is_depth and str(subfolder) == 'color':
+        lut_dirs = [
+            capturestudio_cache_path / 'color_luts',
+            capturestudio_cache_path / 'orbbec' / 'color_luts',
+        ]
+        for cam_dir in all_cam_dirs:
+            cam_idx = int(cam_dir.name.split('cam')[1].split(' ')[0])
+            for lut_dir in lut_dirs:
+                lut_path = lut_dir / f'cam_{cam_idx:02d}.lut'
+                if not lut_path.exists():
+                    continue
+                lut = np.load(str(lut_path))
+                assert lut.shape == (256, 256, 256, 3) and lut.dtype == np.uint8, f"Invalid LUT {lut_path}: shape={lut.shape}, dtype={lut.dtype}"
+                lut_by_cam[cam_dir.name] = lut
+                log(f"Loaded color LUT for {cam_dir.name}: {lut_path}", 'debug')
+                break
+        if len(lut_by_cam) == 0:
+            log(f"No per-camera color LUTs found for multiview video in {lut_dirs}", 'debug')
+        else:
+            missing_luts = [cam_dir.name for cam_dir in all_cam_dirs if cam_dir.name not in lut_by_cam]
+            if len(missing_luts) > 0:
+                log(f"Missing color LUTs for cameras {missing_luts}; those cameras will be shown uncorrected.", 'warning')
     total_len = len(all_file_paths[all_cam_dirs[0].name])
     main_idx = -1
     image_size = PathUtils.read_file(all_file_paths[all_cam_dirs[0].name][0], png_type='depth' if is_depth else 'color').shape[:2]  # (height, width)
@@ -149,13 +173,19 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
     dummy_frame3 = np.zeros((small_height * 3, small_width, 3), dtype=np.uint8)
     dummy_frame4 = np.zeros((small_height * 4, small_width, 3), dtype=np.uint8)
     for t in range(total_len):
-        if t % 100 == 0:
+        if t % 150 == 0:
             main_idx = (main_idx + 1) % len(all_cam_dirs)  # cycle through cameras every 100 frames
-        frames = [
-            ((PathUtils.read_file(all_file_paths[cam_dir.name][t], png_type='depth').clip(200, 4_000).astype(np.float32) - 200) / 3_800) if is_depth else
-            PathUtils.read_file(all_file_paths[cam_dir.name][t])
-            for cam_dir in all_cam_dirs
-        ]
+        frames = []
+        for cam_dir in all_cam_dirs:
+            if is_depth:
+                frame = (PathUtils.read_file(all_file_paths[cam_dir.name][t], png_type='depth').clip(200, 4_000).astype(np.float32) - 200) / 3_800
+            else:
+                frame = PathUtils.read_file(all_file_paths[cam_dir.name][t])
+                lut = lut_by_cam.get(cam_dir.name)
+                if lut is not None:
+                    assert frame.dtype == np.uint8 and frame.ndim == 3 and frame.shape[2] == 3, f"Expected uint8 BGR frame before LUT for {cam_dir.name}, got shape={frame.shape}, dtype={frame.dtype}"
+                    frame = lut[frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]]
+            frames.append(frame)
         for fi, (frame, frame_cam_dir) in enumerate(zip(frames, all_cam_dirs)):
             if frame is None or frame.shape[0] == 0 or frame.shape[1] == 0:
                 log(f"Frame {t} in camera {frame_cam_dir.name} is empty. Replacing it with previous frame in folder in os...", 'warning')
@@ -166,6 +196,10 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
                 if is_depth:
                     frames[fi] = (prev_frame.clip(200, 4_000).astype(np.float32) - 200) / 3_800
                 else:
+                    lut = lut_by_cam.get(frame_cam_dir.name)
+                    if lut is not None:
+                        assert prev_frame.dtype == np.uint8 and prev_frame.ndim == 3 and prev_frame.shape[2] == 3, f"Expected uint8 BGR previous frame before LUT for {frame_cam_dir.name}, got shape={prev_frame.shape}, dtype={prev_frame.dtype}"
+                        prev_frame = lut[prev_frame[:, :, 0], prev_frame[:, :, 1], prev_frame[:, :, 2]]
                     frames[fi] = prev_frame
         # resize to have height of 256px and keep aspect ratio
         resized_frames = [
@@ -239,9 +273,14 @@ def generate_multiview_video(capturestudio_cache_path: str, subfolder: Literal['
                 (canvas.shape[1], canvas.shape[0])
             )
 
-        video_writer.write(canvas)
+        video_writer.write(cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR))
 
     if video_writer is not None:
         video_writer.release()
         log(f"Multiview video generated for session {capturestudio_cache_path.name} ({subfolder})", 'debug')
     return None
+
+
+if __name__ == '__main__':
+    Path('/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Perf_1/orbbec/multiview_color.mp4')
+    generate_multiview_video('/home/charisoudis/capturestudio/data/Cagliari_2_5cams_Perf_1', 'color', 'jpg')

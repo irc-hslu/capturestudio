@@ -102,6 +102,11 @@ sudo apt-get install -y erlang-base \
 sudo apt-get install rabbitmq-server -y --fix-missing
 ```
 
+   iii. `jpeginfo`
+```bash
+sudo apt install jpeginfo
+```
+
 1. Install Celery system-wide:
    ```bash
    sudo apt update
