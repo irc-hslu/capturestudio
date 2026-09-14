@@ -850,6 +850,7 @@ class CaptureStudioVirtualSceneViser(CapturestudioVirtualScene):
     def from_capturestudio_session(cls,
                                    dataset_raw: MultiSessionDataset,
                                    dataset_vis: Optional[Union[MultiSessionDataset, List[MultiSessionDataset], Path, List[Path]]] = None,
+                                   cam_idx_perf: Optional[List[int]] = None,
                                    wall_overshoot_m: float = 1.3,
                                    use_gs: bool = False,
                                    t_start: Union[int, List[int]] = 0,
@@ -879,6 +880,7 @@ class CaptureStudioVirtualSceneViser(CapturestudioVirtualScene):
             background=scene_background,
             camera_orbit_type=camera_orbit_type,
             t_total=max(t_total),
+            cam_idx_perf=cam_idx_perf,
             **{k: kwargs.pop(k) for k in list(kwargs.keys()) if k.startswith('camera')}
         )
         if isinstance(dataset_vis[0], MultiSessionDataset):
@@ -945,6 +947,7 @@ class TeaserGeneratorViser(TeaserGenerator):
         self._scene = CaptureStudioVirtualSceneViser.from_capturestudio_session(
             dataset_raw=self.dataset_raw,
             dataset_vis=self.datasets_vis,
+            cam_idx_perf=self.cam_idx_perf,
             viser_scene=self._server.scene,
             initial_camera=self._server.initial_camera,
             t_start=self.t_start,

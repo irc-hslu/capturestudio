@@ -5,6 +5,7 @@ from typing import List, Literal, Union, Iterator, Tuple, Iterable, Dict, Sequen
 import cv2
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
 from pytorch3d.renderer import look_at_view_transform
 from scipy.interpolate import CubicSpline, interp1d
 from scipy.spatial.transform import Rotation as ScipyRotation, Slerp
@@ -162,13 +163,7 @@ class CameraOrbit(metaclass=abc.ABCMeta):
             #         s = 0
             #         direction = 1
 
-    def traverse_normalized(
-            self,
-            num_frames: int,
-            num_loops: float = 1.0,
-            endpoint: bool = False,
-            debug_mode: bool = False,
-    ) -> Iterator[Tuple[np.ndarray, np.ndarray, int, int]]:
+    def traverse_normalized(self, num_frames: int, num_loops: float = 1.0, endpoint: bool = False, debug_mode: bool = False) -> Iterator[Tuple[np.ndarray, np.ndarray, int, int]]:
         """
         Traverse the virtual trajectory over exactly num_frames frames.
 
@@ -224,202 +219,7 @@ class CameraOrbit(metaclass=abc.ABCMeta):
             else:
                 yield t_intrinsic, t_extrinsic_c2w, gt_idx_closest, gt_idx_middle
 
-    def export_poses_bak(self, scale: float = 0.4, output_path: Union[Path, str] = 'camera_poses.png', visualize_traversal: bool = False) -> None:
-        import numpy as np
-        import open3d as o3d
-        from matplotlib import pyplot as plt
-        from utils.misc import log
-        from pathlib import Path
-
-        def _make_plane_mesh(n: np.ndarray, d: float, center_hint: np.ndarray, extent: float, color_rgb=(0.5, 0.5, 0.5)) -> o3d.geometry.TriangleMesh:
-            n = np.asarray(n, dtype=np.float64)
-            n = n / (np.linalg.norm(n) + 1e-12)
-            a = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-            if abs(np.dot(a, n)) > 0.95:
-                a = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-            e1 = np.cross(n, a);
-            e1 /= (np.linalg.norm(e1) + 1e-12)
-            e2 = np.cross(n, e1);
-            e2 /= (np.linalg.norm(e2) + 1e-12)
-            c0 = center_hint - (np.dot(n, center_hint) + d) * n
-            s = float(extent)
-            corners = np.stack([c0 + (-s) * e1 + (-s) * e2,
-                                c0 + (s) * e1 + (-s) * e2,
-                                c0 + (s) * e1 + (s) * e2,
-                                c0 + (-s) * e1 + (s) * e2], axis=0).astype(np.float64)
-            tri = o3d.geometry.TriangleMesh()
-            tri.vertices = o3d.utility.Vector3dVector(corners)
-            tri.triangles = o3d.utility.Vector3iVector(np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32))
-            tri.compute_vertex_normals()
-            tri.paint_uniform_color(color_rgb)
-            return tri
-
-        scene = o3d.geometry.TriangleMesh()
-        for c2w in self.gt_extrinsics_c2w:
-            frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=scale, origin=c2w[:3, 3])
-            frame.rotate(c2w[:3, :3])
-            scene += frame
-
-        sph0 = o3d.geometry.TriangleMesh.create_sphere(radius=scale * 0.5)
-        sph0.paint_uniform_color([1.0, 0.2, 0.8])
-        sph0.translate(self.mean_look_at_point)
-        sph0.compute_vertex_normals()
-        scene += sph0
-
-        if visualize_traversal:
-            order = []
-            seen = set()
-            steps = max(self.num_points, 200)
-            fps = 30
-            single_vcam_velocity = np.linalg.norm(np.diff(self.virtual_extrinsic_c2w[:, :3, 3], axis=0), axis=1).mean() * fps
-            it = self.traverse(velocity=single_vcam_velocity, loop=False, data_fps=fps, debug_mode=True)
-            for _ in range(steps):
-                try:
-                    t, s, gt_idx_closest, gt_idx_middle = next(it)
-                except StopIteration:
-                    break
-                vidx = min(int(t * self.num_points), self.num_points - 1)
-                if len(order) == 0 or order[-1] != vidx:
-                    order.append(vidx)
-                    seen.add(vidx)
-                if len(seen) >= self.num_points:
-                    break
-            assert len(order) > 0, 'No virtual cams yielded during traversal'
-            cmap = plt.get_cmap('viridis')
-            r0, r1 = scale * 0.05, scale * 0.22
-            M = len(order)
-            for k, vidx in enumerate(order):
-                alpha = 0.0 if M <= 1 else k / (M - 1)
-                col = cmap(alpha)[:3]
-                r = r0 + (r1 - r0) * alpha
-                vc = self.virtual_extrinsic_c2w[vidx][:3, 3]
-                sph = o3d.geometry.TriangleMesh.create_sphere(radius=float(r))
-                sph.paint_uniform_color([float(col[0]), float(col[1]), float(col[2])])
-                sph.translate(vc)
-                sph.compute_vertex_normals()
-                scene += sph
-        else:
-            cmap = plt.get_cmap('tab20')
-            n_gt = len(self.gt_extrinsics_c2w)
-            color_indices = np.arange(n_gt) % 20
-            gt_colors = cmap(color_indices / 19.0)
-            for virtual_idx in range(0, self.num_points, max(1, self.num_points // 40)):
-                virtual_c2w = self.virtual_extrinsic_c2w[virtual_idx]
-                vc = virtual_c2w[:3, 3]
-                # frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=scale, origin=vc)
-                # frame.rotate(virtual_c2w[:3, :3])
-                # scene += frame
-                sph = o3d.geometry.TriangleMesh.create_sphere(radius=scale * 0.1)
-                col = gt_colors[self._inv_assignment_closest.get(virtual_idx, 0) % 20][:3]
-                sph.paint_uniform_color(col)
-                sph.translate(vc)
-                sph.compute_vertex_normals()
-                scene += sph
-
-        fw = getattr(self, "_floor_wall_data", {}) or {}
-        floor_n = fw.get("floor_normal", None)
-        floor_d = fw.get("floor_offset", None)
-        all_pts = np.vstack([self.gt_extrinsics_c2w[:, :3, 3], self.virtual_extrinsic_c2w[:, :3, 3]])
-        aabb = o3d.geometry.AxisAlignedBoundingBox.create_from_points(o3d.utility.Vector3dVector(all_pts.astype(np.float64)))
-        extent = 0.6 * np.linalg.norm(aabb.get_max_bound() - aabb.get_min_bound())
-        center_hint = aabb.get_center().astype(np.float64)
-        # if (isinstance(floor_n, np.ndarray)) and (floor_d is not None):
-        #     floor_mesh = _make_plane_mesh(floor_n, float(floor_d), center_hint, extent, color_rgb=(0.35, 0.35, 0.35))
-        #     scene += floor_mesh
-
-        output_ply_path = Path(output_path).with_suffix('.ply')
-        o3d.io.write_triangle_mesh(output_ply_path, scene, write_ascii=True)
-        log(f"[{self.__class__.__name__}::export_poses] Camera poses saved to {output_ply_path.resolve().parent.name}/{output_ply_path.name}", 'debug')
-
-        renderer = o3d.visualization.rendering.OffscreenRenderer(1024, 1024)
-        renderer.scene.set_background([0.0, 0.0, 0.0, 0.0])
-
-        mat = o3d.visualization.rendering.MaterialRecord()
-        mat.shader = "defaultLit"
-        renderer.scene.add_geometry("scene", scene, mat)
-        bounds = scene.get_axis_aligned_bounding_box()
-        center = bounds.get_center().astype(np.float64)
-        extent = bounds.get_extent().astype(np.float64)
-        extent_len = float(max(extent.max(), 1e-6))
-
-        def _normalize(v: np.ndarray) -> np.ndarray:
-            v = np.asarray(v, dtype=np.float64).reshape(3)
-            return v / (np.linalg.norm(v) + 1e-12)
-
-        def _project_to_plane(v: np.ndarray, n: np.ndarray) -> np.ndarray:
-            v = np.asarray(v, dtype=np.float64).reshape(3)
-            n = _normalize(n)
-            return v - np.dot(v, n) * n
-
-        # BEV viewing direction.
-        # Prefer the estimated floor normal, otherwise use the mean camera up vector.
-        if isinstance(floor_n, np.ndarray):
-            bev_normal = _normalize(floor_n)
-        else:
-            bev_normal = _normalize(self.mean_up_vector)
-        # Make sure BEV camera is above the scene, not below it.
-        mean_up = _normalize(self.mean_up_vector)
-        if np.dot(bev_normal, mean_up) < 0:
-            bev_normal = -bev_normal
-
-        # Screen-up direction for the BEV image.
-        # Use the trajectory direction projected onto the floor plane.
-        traj_dir = (
-                self.virtual_extrinsic_c2w[-1, :3, 3] -
-                self.virtual_extrinsic_c2w[0, :3, 3]
-        )
-        image_up = _project_to_plane(traj_dir, bev_normal)
-        # Robust fallback if the trajectory direction is degenerate.
-        if np.linalg.norm(image_up) < 1e-6:
-            image_up = _project_to_plane(np.array([1.0, 0.0, 0.0]), bev_normal)
-        if np.linalg.norm(image_up) < 1e-6:
-            image_up = _project_to_plane(np.array([0.0, 1.0, 0.0]), bev_normal)
-        image_up = _normalize(image_up)
-
-        # Pick camera distance so the whole scene fits in the top-down view.
-        # Smaller FOV = more orthographic-looking BEV
-        bev_fov_deg = 90.0
-        fov_rad = np.deg2rad(float(bev_fov_deg))
-        half_extent = 0.5 * np.linalg.norm(extent)
-        distance = 1.25 * half_extent / max(np.tan(0.5 * fov_rad), 1e-6)
-        # distance = max(distance, 2.0 * extent_len)
-        cam_pos = center + bev_normal * distance
-        renderer.setup_camera(
-            float(bev_fov_deg),
-            center.astype(np.float32),
-            cam_pos.astype(np.float32),
-            image_up.astype(np.float32),
-        )
-        img = renderer.render_to_image()
-        # output_image_path = Path(output_path).with_suffix('.png')
-        img_np = np.asarray(img)
-        if img_np.ndim == 3 and img_np.shape[2] == 3:
-            rgb = img_np.astype(np.uint8)
-            alpha = (rgb.max(axis=2) > 3).astype(np.uint8) * 255
-            rgba = np.dstack([rgb, alpha])
-            output_image_path = Path(output_path).with_suffix(".png")
-            cv2.imwrite(str(output_image_path), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
-        else:
-            output_image_path = Path(output_path).with_suffix(".png")
-            o3d.io.write_image(output_image_path, img)
-
-        # o3d.io.write_image(output_image_path, img)
-        log(f"[{self.__class__.__name__}::export_poses] Camera poses render saved to {output_image_path.resolve().parent.name}/{output_image_path.name}", 'debug')
-
-    def export_poses(
-            self,
-            scale: float = 0.4,
-            output_path: Union[Path, str] = "camera_poses.png",
-            visualize_traversal: bool = False,
-    ) -> None:
-        import cv2
-        import numpy as np
-        import open3d as o3d
-        from matplotlib import pyplot as plt
-        from pathlib import Path
-
-        from utils.misc import log
-
+    def export_poses(self, scale: float = 0.4, output_path: Union[Path, str] = "camera_poses.png", visualize_traversal: bool = False) -> None:
         # -------------------------------------------------------------------------
         # Helpers
         # -------------------------------------------------------------------------
@@ -1137,7 +937,7 @@ class AudienceViewAnchoredCameraOrbit_bak(CameraOrbit):
         t_hat = chord / (chord_len + 1e-12)
         v_hat = _normalize(torch.cross(n_floor_t, t_hat))  # in-plane, perpendicular to chord
 
-        # TODO: Wall estimation is unreliable. Select solution that is the furthest from the (mean) lookat point.
+        # ATTN: Wall estimation is unreliable. Select solution that is the furthest from the (mean) lookat point.
         # facing the wall (bulge towards wall): project wall onto plane to set sign; fallback to look-at
         if n_wall_t is not None:
             w_in_plane = n_wall_t - torch.dot(n_wall_t, n_floor_t) * n_floor_t
@@ -1417,7 +1217,7 @@ class AudienceViewAnchoredCameraOrbit(CameraOrbit):
                 sign_wall_vs_vhat = torch.sign(torch.dot(_normalize(w_in_plane), v_hat))
 
         # Preferred sign given mode
-        bulge_mode = "away"  # TODO SIMONE33 COMMENT THIS LINE, FOR SINGER CLOSE TO MICROPHONE bulge_mode = "toward"
+        bulge_mode = "toward"  # ATTN: FOR SINGER CLOSE TO MICROPHONE bulge_mode = "toward"
         if bulge_mode == "away":
             base_sign = -sign_wall_vs_vhat  # enforce away from wall
         elif bulge_mode == "toward":
@@ -1674,7 +1474,7 @@ if __name__ == "__main__":
     from utils.calib import CalibrationData
 
     # read session data
-    orbit_ = InterpolatedCameraOrbit.from_session('Cagliari_2_5cams_Calib_2', reconstruction_idx=[1,2,3,4]) #, bezier_degree=2)
+    orbit_ = InterpolatedCameraOrbit.from_session('Cagliari_2_5cams_Calib_2', reconstruction_idx=[1, 2, 3, 4])  # , bezier_degree=2)
     orbit_.export_poses(visualize_traversal=False)
     # counter_ = 0
     # for t_, s_, gtic_, gtim_ in orbit_.traverse(velocity=3.0, loop=True, debug_mode=True):

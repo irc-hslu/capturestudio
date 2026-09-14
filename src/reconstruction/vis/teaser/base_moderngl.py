@@ -745,6 +745,7 @@ class CaptureStudioVirtualSceneModernGL(CapturestudioVirtualScene):
         ctx: moderngl.Context,
         dataset_raw: MultiSessionDataset,
         dataset_vis: Optional[Union[MultiSessionDataset, List[MultiSessionDataset], Path, List[Path]]] = None,
+        cam_idx_perf: Optional[List[int]] = None,
         wall_overshoot_m: float = 1.3,
         use_gs: bool = False,
         t_start: Union[int, List[int]] = 0,
@@ -779,6 +780,7 @@ class CaptureStudioVirtualSceneModernGL(CapturestudioVirtualScene):
             background=scene_background,
             camera_orbit_type=camera_orbit_type,
             t_total=max(t_total),
+            cam_idx_perf=cam_idx_perf,
             **{k: kwargs.pop(k) for k in list(kwargs.keys()) if k.startswith("camera")},
         )
 
@@ -830,6 +832,7 @@ class TeaserGeneratorModernGL(TeaserGenerator):
             ctx=self.ctx,
             dataset_raw=self.dataset_raw,
             dataset_vis=self.datasets_vis,
+            cam_idx_perf=self.cam_idx_perf,
             t_start=self.t_start,
             t_total=self.t_total + 1,
             use_gs=self.render_config.use_gs,

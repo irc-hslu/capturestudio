@@ -451,7 +451,6 @@ class CapturestudioVirtualBackgroundFloorWallEstimator:
         return floor_normal, floor_offset, floor_corners
 
     def __call__(self, views: List[RGBDImage], vis_2d_path: Optional[Path] = None, vis_3d_path: Optional[Path] = None) -> Tuple[np.ndarray, float, np.ndarray, np.ndarray, float, np.ndarray]:
-        views = [views[_] for _ in [0, 3]]
         # Floor plane estimation
         floor_plane_candidates = self._estimate_floor_planes(views)
         if not floor_plane_candidates:
@@ -1139,14 +1138,19 @@ class CapturestudioVirtualCameras:
                                    background: Optional[CapturestudioVirtualBackground],
                                    camera_orbit_type: Literal['interpolated', 'audience'],
                                    t_total: int,
+                                   cam_idx_perf: Optional[List[int]] = None,
                                    camera_orbit_start_idx: Union[int, float] = 0,
                                    **dataclass_kwargs) -> 'CapturestudioVirtualCameras':
         floor_wall_kwargs = {}
         if background is not None:
-            floor_wall_kwargs = dict(floor_normal=background.floor_normal, floor_offset=background.floor_offset,
-                                     wall_normal=background.wall_normal, wall_offset=background.wall_offset)
+            floor_wall_kwargs = dict(
+                floor_normal=background.floor_normal,
+                floor_offset=background.floor_offset,
+                wall_normal=background.wall_normal,
+                wall_offset=background.wall_offset
+            )
 
-        camera_orbit = dataset.get_camera_orbit(camera_orbit_type, **floor_wall_kwargs)
+        camera_orbit = dataset.get_camera_orbit(camera_orbit_type, reconstruction_idx=cam_idx_perf, **floor_wall_kwargs)
         # camera_orbit.export_poses(output_path='safdsafdsfsdfa.png', visualize_traversal=True)
         data_fps = dataclass_kwargs.get('data_fps', 30)
         traverse_velocity = dataclass_kwargs.pop('camera_traverse_velocity', 0.5)
@@ -1352,7 +1356,7 @@ class CapturestudioVirtualDynamicForeground:
                                    use_gs: bool = False,
                                    blending_strategy: Literal['swap', 'blend:blend_pcr', 'merge:naive', 'merge:tsdf'] = 'swap',
                                    write_ply_files: bool = False,
-                                   write_ply_root: str = '/mnt/d/TEASER_{gs_or_pcd}/{session}') -> 'CapturestudioVirtualDynamicForeground':
+                                   write_ply_root: str = '{data_path}/TEASER_{gs_or_pcd}/{session}') -> 'CapturestudioVirtualDynamicForeground':
         class SessionImagesGenerator:
             def __init__(self, _dataset, _use_gs, _t_start, _t_total):
                 self._dataset = _dataset
@@ -1361,7 +1365,7 @@ class CapturestudioVirtualDynamicForeground:
                 self._t_total = _t_total if _t_total > 0 else len(_dataset) - abs(_t_total) - _t_start
                 self._t_current = _t_start
                 self._write_ply_files = write_ply_files
-                self._ply_out_dir = Path(write_ply_root.format(gs_or_pcd="GS" if use_gs else "PCD", session=dataset.session_names[0].lower()))
+                self._ply_out_dir = Path(write_ply_root.format(data_path=PathUtils.data_path(), gs_or_pcd="GS" if use_gs else "PCD", session=dataset.session_names[0].lower()))
                 if self._write_ply_files:
                     self._ply_out_dir.mkdir(parents=True, exist_ok=True)
                     for cam_idx_s0 in dataset.cam_indices_s0:
@@ -1585,7 +1589,6 @@ class TeaserGenerator(metaclass=abc.ABCMeta):
             self,
             session_perf: Union[str, List[Union[str, Path]]],
             session_calib: str,
-            calib_method: Literal['Caliscope', 'MultiCamCalib'],
             depth_source: Literal['bilateral_spatial', 'bilateral_temporal', 'aligned'],
             cam_idx_perf: List[int],
             cam_idx_raw: List[int],
@@ -1605,7 +1608,6 @@ class TeaserGenerator(metaclass=abc.ABCMeta):
         self.session_raw = session_calib
         self.sessions_perf = sessions_perf
         self.session_calib = session_calib
-        self.calib_method = calib_method
         self.depth_source = depth_source
         self.cam_idx_perf = cam_idx_perf
         self.cam_idx_raw = cam_idx_raw
@@ -1622,7 +1624,6 @@ class TeaserGenerator(metaclass=abc.ABCMeta):
     def dataset_raw(self) -> MultiSessionDataset:
         return MultiSessionDataset(
             calibration_session_name=self.session_calib,
-            calibration_method=self.calib_method,
             session_names=[self.session_raw],
             cam_indices=self.cam_idx_raw,
             n_cams_per_sample=-1,
@@ -1641,7 +1642,6 @@ class TeaserGenerator(metaclass=abc.ABCMeta):
         return [
             MultiSessionDataset(
                 calibration_session_name=self.session_calib,
-                calibration_method=self.calib_method,
                 session_names=[session_perf_i],
                 cam_indices=self.cam_idx_perf,
                 n_cams_per_sample=-1,

@@ -362,7 +362,13 @@ class CaptureStudioVirtualSceneOpen3D(CapturestudioVirtualScene):
                 attr_i.tick(**kwargs)
 
     @classmethod
-    def from_capturestudio_session(cls, renderer: o3d.visualization.rendering.OffscreenRenderer, dataset_raw: MultiSessionDataset, **kwargs) -> 'CaptureStudioVirtualSceneOpen3D':
+    def from_capturestudio_session(
+            cls,
+            renderer: o3d.visualization.rendering.OffscreenRenderer,
+            dataset_raw: MultiSessionDataset,
+            cam_idx_perf:List[int],
+            **kwargs
+    ) -> 'CaptureStudioVirtualSceneOpen3D':
         dataset_vis = kwargs.pop('dataset_vis', dataset_raw)
         wall_overshoot_m = kwargs.pop('wall_overshoot_m', 1.3)
         use_gs = kwargs.pop('use_gs', False)
@@ -386,7 +392,11 @@ class CaptureStudioVirtualSceneOpen3D(CapturestudioVirtualScene):
             scene_background = CapturestudioVirtualBackgroundOpen3D.from_capturestudio_dataset(dataset_raw, wall_overshoot_m=wall_overshoot_m, **floor_wall_kwargs)
 
         scene_cameras = CapturestudioVirtualCamerasOpen3D.from_capturestudio_dataset(
-            dataset_raw, background=scene_background, camera_orbit_type=camera_orbit_type, t_total=max(t_total),
+            dataset_raw,
+            background=scene_background,
+            camera_orbit_type=camera_orbit_type,
+            t_total=max(t_total),
+            cam_idx_perf=cam_idx_perf,
             **{k: kwargs.pop(k) for k in list(kwargs.keys()) if k.startswith('camera')}
         )
 
@@ -426,6 +436,7 @@ class TeaserGeneratorOpen3D(TeaserGenerator):
             renderer=self.renderer,
             dataset_raw=self.dataset_raw,
             dataset_vis=self.datasets_vis,
+            cam_idx_perf=self.cam_idx_perf,
             t_start=self.t_start,
             t_total=self.t_total + 1,
             use_gs=self.render_config.use_gs,
@@ -477,7 +488,7 @@ if __name__ == '__main__':
     # @formatter:off
     DATA = [
         # ('Cagliari_1_Perf_7',    'Cagliari_1_Calib_6',    0,    list(range(1, 8))),
-        ("Cagliari_2_5cams_Perf_1", "Cagliari_2_5cams_Calib_2", 500, list(range(1, 6))),
+        ["Cagliari_2_5cams_Perf_1", "Cagliari_2_5cams_Calib_2", 100, [2,5]],
     ]
     # @formatter:on
     DEBUG = False
@@ -486,31 +497,32 @@ if __name__ == '__main__':
     import gc as gc_
     import torch
 
+
     for SESSION_PERF, SESSION_CALIB, T_START, CAM_IDX in DATA:
         video_paths_ = {}
         for use_gs_ in [False]:
             visualizer_ = TeaserGeneratorOpen3D(
                 session_perf=SESSION_PERF if isinstance(SESSION_PERF, list) else SESSION_PERF.split('|'),
                 session_calib=SESSION_CALIB,
-                calib_method='Caliscope',
                 depth_source='bilateral_spatial',
                 cam_idx_perf=CAM_IDX,
-                cam_idx_raw=CAM_IDX,
+                cam_idx_raw=range(1, 6),
                 render_config=TeaserGeneratorRenderConfig.for_apr_may_2025(
                     camera_orbit_type='audience',
                     use_gs=use_gs_,
                     image_size_hw=(1080, 1920),
-                    camera_traverse_velocity=0.5,
+                    camera_traverse_velocity=0.3,
                     camera_orbit_offset_m=0.6,
                     wall_overshoot_m=-10,
                 ),
                 t_start=T_START,
                 # t_total=600,
-                t_total=1 if DEBUG else 600,  # reduced for quick tests
+                t_total=1 if DEBUG else -1,  # reduced for quick tests
                 show_background=True,
                 camera_orbit_start_idx=0,
                 fg_blending_strategy='swap',
-                floor_t=500,
+                # floor_t=500,
+                fg_write_ply_files=True,
             )
             video_path_ = visualizer_.run()
 

@@ -329,7 +329,7 @@ class PathUtils:
         -------
         Path
         """
-        return cls.project_path() / 'data'
+        return Path(env_get('DATA_HOME', str(cls.project_path() / 'data')))
 
     @classmethod
     def dataset_path(cls, dataset_name: str) -> Path:
@@ -344,7 +344,10 @@ class PathUtils:
         -------
         Path
         """
-        return Path(env_get('DATA_HOME', str(cls.data_path() / 'Datasets'))) / dataset_name
+        datasets_root = Path(env_get('DATA_HOME', str(cls.data_path())))
+        if datasets_root.name.lower() != 'datasets':
+            datasets_root = datasets_root / 'Datasets'
+        return datasets_root / dataset_name
 
     @classmethod
     def dependencies_path(cls) -> Path:

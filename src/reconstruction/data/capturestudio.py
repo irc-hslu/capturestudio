@@ -204,7 +204,6 @@ class MultiSessionDataset(Dataset):
 
     def __init__(self,
                  calibration_session_name: str,
-                 calibration_method: Union[Literal['Caliscope'], Literal['MultiCamCalib']],
                  cam_indices: List[int],
                  session_names: List[str],
                  depth_filter: Optional[Literal['bilateral_spatial', 'bilateral_temporal', 'aligned']] = 'bilateral_spatial',
@@ -219,7 +218,6 @@ class MultiSessionDataset(Dataset):
                  use_color_luts: bool = True):
         self.depth_filter = depth_filter
         self.calibration_session_name = calibration_session_name
-        self.calibration_method = calibration_method
         self.session_names = session_names
         self.session_roots = []
         for session_name in session_names:
@@ -260,7 +258,6 @@ class MultiSessionDataset(Dataset):
             raise FileNotFoundError(f"Calibration session {self.calibration_session_name} not found")
         all_calibration_data = CalibrationData.from_session(
             session_path=_calibration_session_path,
-            method=calibration_method
         )
         if target_image_size_hw is not None and rotate is not None:
             all_calibration_data = (all_calibration_data
@@ -458,7 +455,7 @@ class MultiSessionDataset(Dataset):
                 other_extrinsic_w2c=extrinsics_w2c_ori[ir].copy(),
                 image_size_hw=self.src_image_size_hw,
                 use_cache=True,
-                cache_key_prefix=f"{self.calibration_session_name}_{self.calibration_method}".lower()
+                cache_key_prefix=f"{self.calibration_session_name}".lower()
             )
             if (ir, il) not in self.rectification_data:
                 self.rectification_data[(ir, il)] = StereoUtils.compute_rectification_data(
@@ -468,16 +465,15 @@ class MultiSessionDataset(Dataset):
                     other_extrinsic_w2c=extrinsics_w2c_ori[il].copy(),
                     image_size_hw=self.src_image_size_hw,
                     use_cache=True,
-                    cache_key_prefix=f"{self.calibration_session_name}_{self.calibration_method}".lower()
+                    cache_key_prefix=f"{self.calibration_session_name}".lower()
                 )
 
-    def get_camera_orbit(self, orbit_type: Literal['interpolated', 'audience'] = 'interpolated', floor_wall_data: Optional[dict] = None, **trajectory_kwargs):
+    def get_camera_orbit(self, orbit_type: Literal['interpolated', 'audience'] = 'interpolated', floor_wall_data: Optional[dict] = None, reconstruction_idx: Optional[List[int]] = None, **trajectory_kwargs):
         # Estimate floor and wall
         from reconstruction.primitive.pcd import RGBDImage
         from reconstruction.vis.dataset_visualizer import DatasetVisualizer
         ds_with_unfiltered_depth = self if self.depth_filter == 'aligned' else self.__class__(
             calibration_session_name=self.calibration_session_name,
-            calibration_method=self.calibration_method,
             cam_indices=self.cam_indices,
             session_names=self.session_names,
             depth_filter='aligned',
@@ -511,24 +507,25 @@ class MultiSessionDataset(Dataset):
             floor_wall_data = {}
             return InterpolatedCameraOrbit.from_session(
                 calibration_session=self.calibration_session_name,
-                calibration_method=self.calibration_method,
                 trajectory_idx=self.cam_indices,
-                reconstruction_idx=self.cam_indices,
+                reconstruction_idx=reconstruction_idx if reconstruction_idx is not None else self.cam_indices, # only those will be used for closest-camera-assignment
                 image_size_hw=self.target_image_size_hw,
                 rotate=self.rotate,
                 **(floor_wall_data | trajectory_kwargs)
             )
+
         if orbit_type == 'audience':
             # Create a trajectory anchored on the first and last's camera position, and that is curved and in a plane parallel to the floor
             from reconstruction.vis.cam_orbit import AudienceViewAnchoredCameraOrbit
             return AudienceViewAnchoredCameraOrbit.from_session(
                 calibration_session=self.calibration_session_name,
                 trajectory_idx=self.cam_indices,
-                reconstruction_idx=self.cam_indices,
+                reconstruction_idx=reconstruction_idx if reconstruction_idx is not None else self.cam_indices, # only those will be used for closest-camera-assignment
                 image_size_hw=self.target_image_size_hw,
                 rotate=self.rotate,
                 **(floor_wall_data | trajectory_kwargs)
             )
+
         raise ValueError('orbit_type not supported: {}'.format(orbit_type))
 
 
